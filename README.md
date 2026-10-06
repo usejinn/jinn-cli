@@ -49,7 +49,7 @@ Full reference: [docs.usejinn.com/cli](https://docs.usejinn.com/cli). Jinn is in
 
 ## Verify
 
-Releases are built only by [this repository's release workflow](.github/workflows/release.yml), and each file has a build provenance attestation:
+Releases are built only by [this repository's release workflow](.github/workflows/release.yml) and are immutable once published. Each file has a build provenance attestation:
 
 ```sh
 gh attestation verify jinn-linux-amd64 --repo usejinn/jinn-cli
@@ -58,7 +58,7 @@ gh attestation verify jinn-linux-amd64 --repo usejinn/jinn-cli
 The build is reproducible. Rebuild a tag and compare its SHA-256 with the release's `SHA256SUMS`:
 
 ```sh
-git checkout v0.3.0
+git checkout v0.3.1
 GOTOOLCHAIN=go1.25.12 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w -buildid=" -o jinn-linux-amd64 .
 sha256sum jinn-linux-amd64
 ```

@@ -1,5 +1,5 @@
 # Builds a release when a version tag (v1.2.3) arrives. This workflow is the
-# only place jinn's binaries are built. Each binary, SHA256SUMS and install.sh
+# only place jinn's binaries are built, and its releases are immutable. Each binary, SHA256SUMS and install.sh
 # get a build provenance attestation, so anyone can check where a file came
 # from: gh attestation verify FILE --repo usejinn/jinn-cli
 #
@@ -41,12 +41,17 @@ jobs:
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: 'dist/*'
+      # Releases are immutable (enforced for the usejinn organisation): once
+      # published, nothing in one can change. So the release is a draft until
+      # every file is uploaded, then published once.
       - name: Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --notes "Install with:
+          gh release create "$GITHUB_REF_NAME" --draft --verify-tag --title "$GITHUB_REF_NAME" --notes "Install with:
           curl -fsSL https://github.com/usejinn/jinn-cli/releases/latest/download/install.sh | sh
 
           Check a file's origin with:
           gh attestation verify FILE --repo usejinn/jinn-cli"
+          gh release upload "$GITHUB_REF_NAME" dist/*
+          gh release edit "$GITHUB_REF_NAME" --draft=false --latest
