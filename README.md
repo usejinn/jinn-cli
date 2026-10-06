@@ -45,6 +45,8 @@ Each publish is a new version, and every run records the version it used. Start 
 | `jinn providers`, `jinn models VENDOR`, `jinn provider NAME` | Manage model keys (read from stdin) |
 | `jinn login`, `jinn bases`, `jinn functions`, `jinn version` | Everything else |
 
+Add `--json` to any command for JSON output, one document or one line per event. Exit statuses tell failures apart: 1 the run failed, 2 wrong usage, 3 the API refused, 4 anything else. See [Use Jinn from an agent](https://docs.usejinn.com/agents).
+
 Full reference: [docs.usejinn.com/cli](https://docs.usejinn.com/cli). Jinn is invitation-only for now: write to [support@usejinn.com](mailto:support@usejinn.com).
 
 ## Verify
@@ -58,7 +60,7 @@ gh attestation verify jinn-linux-amd64 --repo usejinn/jinn-cli
 The build is reproducible. Rebuild a tag and compare its SHA-256 with the release's `SHA256SUMS`:
 
 ```sh
-git checkout v0.3.1
+git checkout v0.4.0
 GOTOOLCHAIN=go1.25.12 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w -buildid=" -o jinn-linux-amd64 .
 sha256sum jinn-linux-amd64
 ```

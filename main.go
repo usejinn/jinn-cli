@@ -52,17 +52,62 @@ const usage = `jinn: run agent work as a call.
   jinn provider NAME|prv_… --vendor V --model M [--effort E] [--compact N] [--max-output N]   < vendor-key
 
 Vendor keys are read from stdin, never from a flag: echo "$OPENAI_API_KEY" | jinn models openai
+--json (any command): print JSON, one document or one line per event.
+Exit status: 0 done, 1 the run failed, 2 usage, 3 the API refused, 4 anything else.
 The key comes from JINN_KEY, else ~/.config/jinn/key. Docs: https://docs.usejinn.com/cli
 `
+
+// asJSON is --json: every command prints JSON on stdout (a document, or
+// JSON lines for a stream) and errors as JSON on stderr.
+var asJSON bool
+
+// emit prints one JSON document as one line.
+func emit(v any) {
+	b, _ := json.Marshal(v)
+	fmt.Println(string(b))
+}
+
+// The exit status says what kind of failure it was, so scripts and agents can
+// branch on it without reading the message.
+const (
+	exitRunFailed = 1
+	exitUsage     = 2
+	exitRefused   = 3
+	exitOther     = 4
+)
+
+// usageError is a command used wrongly.
+type usageError string
+
+func (e usageError) Error() string { return string(e) }
+
+// runFailed is a run that ended in failed.
+type runFailed struct{ run jinn.Run }
+
+func (e runFailed) Error() string {
+	return fmt.Sprintf("%s failed: %s: %s", e.run.ID, e.run.Failure, e.run.Detail)
+}
 
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Fprint(os.Stderr, usage)
-		os.Exit(2)
+		os.Exit(exitUsage)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	cmd, args := os.Args[1], os.Args[2:]
+	var argv []string
+	for _, a := range os.Args[1:] {
+		if a == "--json" {
+			asJSON = true
+			continue
+		}
+		argv = append(argv, a)
+	}
+	if len(argv) == 0 {
+		fmt.Fprint(os.Stderr, usage)
+		os.Exit(exitUsage)
+	}
+	cmd, args := argv[0], argv[1:]
 	var err error
 	switch cmd {
 	case "login":
@@ -94,16 +139,36 @@ func main() {
 		if bi, ok := debug.ReadBuildInfo(); ok && bi.Main.Version != "" && bi.Main.Version != "(devel)" {
 			v = bi.Main.Version
 		}
-		fmt.Println("jinn", v)
+		if asJSON {
+			emit(map[string]string{"version": v})
+		} else {
+			fmt.Println("jinn", v)
+		}
 	case "help", "-h", "--help":
 		fmt.Print(usage)
 	default:
-		fmt.Fprintf(os.Stderr, "jinn: no command %q\n\n%s", cmd, usage)
-		os.Exit(2)
+		err = usageError(fmt.Sprintf("no command %q; run jinn help", cmd))
 	}
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "jinn:", strings.TrimPrefix(err.Error(), "jinn: "))
-		os.Exit(1)
+		code, status, apiCode := exitOther, 0, ""
+		var ue usageError
+		var rf runFailed
+		var ae *jinn.Error
+		switch {
+		case errors.As(err, &ue):
+			code = exitUsage
+		case errors.As(err, &rf):
+			code = exitRunFailed
+		case errors.As(err, &ae):
+			code, status, apiCode = exitRefused, ae.Status, ae.Code
+		}
+		if asJSON {
+			b, _ := json.Marshal(map[string]any{"error": err.Error(), "exit": code, "status": status, "code": apiCode})
+			fmt.Fprintln(os.Stderr, string(b))
+		} else {
+			fmt.Fprintln(os.Stderr, "jinn:", strings.TrimPrefix(err.Error(), "jinn: "))
+		}
+		os.Exit(code)
 	}
 }
 
@@ -148,7 +213,11 @@ func login(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("Open %s\nCheck that it shows %s, then approve.\n", l.URL, l.Code)
+	if asJSON {
+		emit(map[string]any{"type": "login", "url": l.URL, "code": l.Code, "expires_at": l.ExpiresAt})
+	} else {
+		fmt.Printf("Open %s\nCheck that it shows %s, then approve.\n", l.URL, l.Code)
+	}
 	ctx, cancel := context.WithDeadline(ctx, time.Unix(l.ExpiresAt, 0))
 	defer cancel()
 	key, err := l.Wait(ctx, apiURL())
@@ -161,7 +230,11 @@ func login(ctx context.Context) error {
 	if err := os.WriteFile(keyFile(), []byte(key+"\n"), 0o600); err != nil {
 		return err
 	}
-	fmt.Println("Signed in. The key is in", keyFile())
+	if asJSON {
+		emit(map[string]any{"type": "signed_in", "key_file": keyFile()})
+	} else {
+		fmt.Println("Signed in. The key is in", keyFile())
+	}
 	return nil
 }
 
@@ -171,6 +244,10 @@ func bases(ctx context.Context) error {
 		return err
 	}
 	list, err := c.Bases(ctx)
+	if err == nil && asJSON {
+		emit(list)
+		return nil
+	}
 	for _, b := range list {
 		fmt.Printf("%s  %s\n", b.Name, size(b.Bytes))
 	}
@@ -183,6 +260,10 @@ func functions(ctx context.Context) error {
 		return err
 	}
 	list, err := c.Functions(ctx)
+	if err == nil && asJSON {
+		emit(list)
+		return nil
+	}
 	for _, f := range list {
 		last := "never run"
 		if f.Last != nil {
@@ -221,7 +302,7 @@ func functionID(ctx context.Context, c *jinn.Client, nameOrID string) (string, e
 // the account's function with that name, or makes it.
 func publish(ctx context.Context, args []string) error {
 	if len(args) != 1 {
-		return errors.New("usage: jinn publish function.json")
+		return usageError("usage: jinn publish function.json")
 	}
 	data, err := os.ReadFile(args[0])
 	if err != nil {
@@ -251,13 +332,17 @@ func publish(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	if asJSON {
+		emit(v)
+		return nil
+	}
 	fmt.Printf("%s %s %s v%d\n", paint(green, "→"), in.Name, paint(cyan, v.Function), v.Version)
 	return nil
 }
 
 func run(ctx context.Context, args []string) error {
 	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
-		return errors.New("usage: jinn run NAME|fnc_… --prompt PROMPT [--in DIR] [--out DIR]")
+		return usageError("usage: jinn run NAME|fnc_… --prompt PROMPT [--in DIR] [--out DIR]")
 	}
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	prompt := fs.String("prompt", "", "the agent's first message")
@@ -269,7 +354,7 @@ func run(ctx context.Context, args []string) error {
 	ref := fs.String("ref", "", "your id for this run")
 	detach := fs.Bool("detach", false, "print the run's id and return")
 	if err := fs.Parse(args[1:]); err != nil {
-		return err
+		return usageError(err.Error())
 	}
 	c, err := client()
 	if err != nil {
@@ -289,7 +374,15 @@ func run(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("%s queued %s\n", paint(cyan, r.ID), paint(dim, fmt.Sprintf("· %s v%d", args[0], r.Version)))
+	switch {
+	case asJSON && *detach:
+		emit(r)
+		return nil
+	case asJSON:
+		emit(map[string]any{"type": "run", "run": r})
+	default:
+		fmt.Printf("%s queued %s\n", paint(cyan, r.ID), paint(dim, fmt.Sprintf("· %s v%d", args[0], r.Version)))
+	}
 	if *detach {
 		return nil
 	}
@@ -298,23 +391,37 @@ func run(ctx context.Context, args []string) error {
 		return err
 	}
 	if r.State != jinn.Succeeded {
-		return fmt.Errorf("%s failed: %s: %s", r.ID, r.Failure, r.Detail)
+		return runFailed{r}
 	}
-	fmt.Printf("%s in %s\n", paint(green, "✓ succeeded"), took(r))
+	if !asJSON {
+		fmt.Printf("%s in %s\n", paint(green, "✓ succeeded"), took(r))
+	}
 	if *out != "" {
-		if err := c.DownloadOutput(ctx, r, *out); err != nil {
-			return err
-		}
-		for _, f := range r.Output.Files {
-			if !f.Dir {
-				fmt.Printf("%s %s\n", filepath.Join(*out, f.Path), size(f.Bytes))
-			}
+		return download(ctx, c, r, *out)
+	}
+	return nil
+}
+
+// download unpacks a run's output into dir and lists its files.
+func download(ctx context.Context, c *jinn.Client, r jinn.Run, dir string) error {
+	if err := c.DownloadOutput(ctx, r, dir); err != nil {
+		return err
+	}
+	if asJSON {
+		emit(map[string]any{"type": "output", "dir": dir, "files": r.Output.Files, "file_count": r.Output.FileCount})
+		return nil
+	}
+	for _, f := range r.Output.Files {
+		if !f.Dir {
+			fmt.Printf("%s %s\n", filepath.Join(dir, f.Path), size(f.Bytes))
 		}
 	}
 	return nil
 }
 
 // follow prints a run's log as it grows and returns the run once it ends.
+// With --json it prints JSON lines: {"type":"run","run":…} when the run
+// starts and when it ends, and {"type":"log",…} for each log event.
 func follow(ctx context.Context, c *jinn.Client, r jinn.Run) (jinn.Run, error) {
 	seen, running := 0, false
 	for {
@@ -324,7 +431,11 @@ func follow(ctx context.Context, c *jinn.Client, r jinn.Run) (jinn.Run, error) {
 		}
 		if r.State != jinn.Queued && !running {
 			running = true
-			fmt.Printf("%s running\n", paint(cyan, r.ID))
+			if asJSON {
+				emit(map[string]any{"type": "run", "run": r})
+			} else {
+				fmt.Printf("%s running\n", paint(cyan, r.ID))
+			}
 		}
 		if running {
 			events, err := c.Log(ctx, r.ID)
@@ -332,11 +443,18 @@ func follow(ctx context.Context, c *jinn.Client, r jinn.Run) (jinn.Run, error) {
 				return r, err
 			}
 			for _, e := range events[min(seen, len(events)):] {
-				printEvent(e)
+				if asJSON {
+					emit(logLine(e))
+				} else {
+					printEvent(e)
+				}
 			}
 			seen = len(events)
 		}
 		if r.Done() {
+			if asJSON {
+				emit(map[string]any{"type": "run", "run": r})
+			}
 			return r, nil
 		}
 		select {
@@ -345,6 +463,15 @@ func follow(ctx context.Context, c *jinn.Client, r jinn.Run) (jinn.Run, error) {
 		case <-time.After(5 * time.Second):
 		}
 	}
+}
+
+// logLine is a log event as one JSON object: type log, at, kind and its fields.
+func logLine(e jinn.LogEvent) map[string]any {
+	line := map[string]any{"type": "log", "at": e.At, "kind": e.Kind}
+	for k, v := range e.Fields {
+		line[k] = v
+	}
+	return line
 }
 
 // printEvent prints what the agent did, one line each.
@@ -379,7 +506,7 @@ func runs(ctx context.Context, args []string) error {
 	function := fs.String("function", "", "one function's runs")
 	state := fs.String("state", "", "active, succeeded or failed")
 	if err := fs.Parse(args); err != nil {
-		return err
+		return usageError(err.Error())
 	}
 	c, err := client()
 	if err != nil {
@@ -391,9 +518,13 @@ func runs(ctx context.Context, args []string) error {
 			return err
 		}
 	}
-	list, _, err := c.Runs(ctx, q)
+	list, next, err := c.Runs(ctx, q)
 	if err != nil {
 		return err
+	}
+	if asJSON {
+		emit(map[string]any{"runs": list, "next": next})
+		return nil
 	}
 	fns, err := c.Functions(ctx)
 	if err != nil {
@@ -420,7 +551,7 @@ func runs(ctx context.Context, args []string) error {
 
 func show(ctx context.Context, args []string) error {
 	if len(args) != 1 {
-		return errors.New("usage: jinn show run_…")
+		return usageError("usage: jinn show run_…")
 	}
 	c, err := client()
 	if err != nil {
@@ -430,6 +561,10 @@ func show(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	if asJSON {
+		emit(r)
+		return nil
+	}
 	b, _ := json.MarshalIndent(r, "", "  ")
 	fmt.Println(string(b))
 	return nil
@@ -437,12 +572,12 @@ func show(ctx context.Context, args []string) error {
 
 func logs(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: jinn logs run_… [--follow]")
+		return usageError("usage: jinn logs run_… [--follow]")
 	}
 	fs := flag.NewFlagSet("logs", flag.ContinueOnError)
 	followFlag := fs.Bool("follow", false, "keep printing until the run ends")
 	if err := fs.Parse(args[1:]); err != nil {
-		return err
+		return usageError(err.Error())
 	}
 	c, err := client()
 	if err != nil {
@@ -454,12 +589,18 @@ func logs(ctx context.Context, args []string) error {
 	}
 	if *followFlag {
 		r, err = follow(ctx, c, r)
-		if err == nil {
+		if err == nil && !asJSON {
 			fmt.Printf("%s %s %s\n", r.ID, r.State, r.Failure)
 		}
 		return err
 	}
 	events, err := c.Log(ctx, r.ID)
+	if asJSON {
+		for _, e := range events {
+			emit(logLine(e))
+		}
+		return err
+	}
 	for _, e := range events {
 		b, _ := json.Marshal(e.Fields)
 		fmt.Printf("%s %-11s %s\n", e.At.Format("15:04:05"), e.Kind, b)
@@ -469,12 +610,12 @@ func logs(ctx context.Context, args []string) error {
 
 func output(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: jinn output run_… --out DIR")
+		return usageError("usage: jinn output run_… --out DIR")
 	}
 	fs := flag.NewFlagSet("output", flag.ContinueOnError)
 	out := fs.String("out", ".", "where to put the output folder")
 	if err := fs.Parse(args[1:]); err != nil {
-		return err
+		return usageError(err.Error())
 	}
 	c, err := client()
 	if err != nil {
@@ -484,7 +625,10 @@ func output(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	return c.DownloadOutput(ctx, r, *out)
+	if r.Output == nil {
+		return fmt.Errorf("%s has no output: it is %s", r.ID, r.State)
+	}
+	return download(ctx, c, r, *out)
 }
 
 func providers(ctx context.Context) error {
@@ -493,6 +637,10 @@ func providers(ctx context.Context) error {
 		return err
 	}
 	list, err := c.Providers(ctx)
+	if err == nil && asJSON {
+		emit(list)
+		return nil
+	}
 	for _, p := range list {
 		v := p.Versions[0]
 		effort := v.Model.ReasoningEffort
@@ -523,7 +671,7 @@ func vendorKey() (string, error) {
 
 func models(ctx context.Context, args []string) error {
 	if len(args) != 1 {
-		return errors.New("usage: jinn models openai|anthropic|xai < vendor-key")
+		return usageError("usage: jinn models openai|anthropic|xai < vendor-key")
 	}
 	key, err := vendorKey()
 	if err != nil {
@@ -534,6 +682,10 @@ func models(ctx context.Context, args []string) error {
 		return err
 	}
 	list, err := c.Catalog(ctx, args[0], key)
+	if err == nil && asJSON {
+		emit(list)
+		return nil
+	}
 	for _, m := range list {
 		efforts := strings.Join(m.Efforts, ",")
 		if m.DefaultEffort != "" {
@@ -573,7 +725,7 @@ func providerID(ctx context.Context, c *jinn.Client, nameOrID string) (string, e
 // against the vendor's catalog.
 func provider(ctx context.Context, args []string) error {
 	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
-		return errors.New("usage: jinn provider NAME|prv_… --vendor V --model M [--effort E] [--compact N] [--max-output N] < vendor-key")
+		return usageError("usage: jinn provider NAME|prv_… --vendor V --model M [--effort E] [--compact N] [--max-output N] < vendor-key")
 	}
 	fs := flag.NewFlagSet("provider", flag.ContinueOnError)
 	vendor := fs.String("vendor", "", "openai, anthropic or xai")
@@ -582,10 +734,10 @@ func provider(ctx context.Context, args []string) error {
 	compact := fs.Int("compact", 200000, "the history size, in tokens, at which a run compacts")
 	maxOutput := fs.Int("max-output", 0, "the most tokens per reply (0: the model's maximum)")
 	if err := fs.Parse(args[1:]); err != nil {
-		return err
+		return usageError(err.Error())
 	}
 	if *vendor == "" || *model == "" {
-		return errors.New("name the --vendor and the --model")
+		return usageError("name the --vendor and the --model")
 	}
 	key, err := vendorKey()
 	if err != nil {
@@ -606,6 +758,10 @@ func provider(ctx context.Context, args []string) error {
 	}
 	if err != nil {
 		return err
+	}
+	if asJSON {
+		emit(p)
+		return nil
 	}
 	fmt.Printf("%s %s %s v%d · use %s@latest in a function's provider\n", paint(green, "→"), p.Name, paint(cyan, p.ID), p.Version, p.ID)
 	return nil
