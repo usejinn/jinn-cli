@@ -44,4 +44,9 @@ jobs:
       - name: Release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --notes "Install: curl -fsSL https://github.com/usejinn/jinn-cli/releases/latest/download/install.sh | sh. Verify a file: gh attestation verify FILE --repo usejinn/jinn-cli."
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --notes "Install with:
+          curl -fsSL https://github.com/usejinn/jinn-cli/releases/latest/download/install.sh | sh
+
+          Check a file's origin with:
+          gh attestation verify FILE --repo usejinn/jinn-cli"
