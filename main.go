@@ -1,4 +1,5 @@
-// Command jinn is Jinn's CLI. It uses the same API as everything else.
+// Command jinn is Jinn's CLI (go install usejinn.com/jinn@latest). It uses
+// the same API as everything else, through the Go SDK (usejinn.com/go).
 //
 //	jinn login                                   sign this machine in (a person approves it in the console)
 //	jinn bases                                   list the bases a function can boot
@@ -28,6 +29,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -87,6 +89,12 @@ func main() {
 		err = models(ctx, args)
 	case "provider":
 		err = provider(ctx, args)
+	case "version", "--version":
+		v := "(built from source)"
+		if bi, ok := debug.ReadBuildInfo(); ok && bi.Main.Version != "" && bi.Main.Version != "(devel)" {
+			v = bi.Main.Version
+		}
+		fmt.Println("jinn", v)
 	case "help", "-h", "--help":
 		fmt.Print(usage)
 	default:
@@ -243,7 +251,7 @@ func publish(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("→ %s %s v%d\n", in.Name, v.Function, v.Version)
+	fmt.Printf("%s %s %s v%d\n", paint(green, "→"), in.Name, paint(cyan, v.Function), v.Version)
 	return nil
 }
 
@@ -281,7 +289,7 @@ func run(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("%s queued · %s v%d\n", r.ID, args[0], r.Version)
+	fmt.Printf("%s queued %s\n", paint(cyan, r.ID), paint(dim, fmt.Sprintf("· %s v%d", args[0], r.Version)))
 	if *detach {
 		return nil
 	}
@@ -292,7 +300,7 @@ func run(ctx context.Context, args []string) error {
 	if r.State != jinn.Succeeded {
 		return fmt.Errorf("%s failed: %s: %s", r.ID, r.Failure, r.Detail)
 	}
-	fmt.Printf("✓ succeeded in %s\n", took(r))
+	fmt.Printf("%s in %s\n", paint(green, "✓ succeeded"), took(r))
 	if *out != "" {
 		if err := c.DownloadOutput(ctx, r, *out); err != nil {
 			return err
@@ -316,7 +324,7 @@ func follow(ctx context.Context, c *jinn.Client, r jinn.Run) (jinn.Run, error) {
 		}
 		if r.State != jinn.Queued && !running {
 			running = true
-			fmt.Printf("%s running\n", r.ID)
+			fmt.Printf("%s running\n", paint(cyan, r.ID))
 		}
 		if running {
 			events, err := c.Log(ctx, r.ID)
@@ -352,17 +360,17 @@ func printEvent(e jinn.LogEvent) {
 	switch e.Kind {
 	case "setup":
 		code, _ := e.Fields["exit_code"].(float64)
-		fmt.Printf("setup  %s  → %d\n", line(s("command")), int(code))
+		fmt.Printf("%s  %s  %s\n", paint(dim, "setup"), paint(dim, line(s("command"))), paint(dim, fmt.Sprintf("→ %d", int(code))))
 	case "text":
-		fmt.Printf("agent  %s\n", line(s("text")))
+		fmt.Printf("%s  %s\n", paint(violet, "agent"), line(s("text")))
 	case "tool_call":
-		fmt.Printf("agent  %s %s\n", s("name"), line(s("arguments")))
+		fmt.Printf("%s  %s %s\n", paint(violet, "agent"), s("name"), paint(dim, line(s("arguments"))))
 	case "tool_output":
 		if failed, _ := e.Fields["error"].(bool); failed {
-			fmt.Printf("       %s → %s\n", s("name"), line(s("output")))
+			fmt.Printf("       %s → %s\n", s("name"), paint(red, line(s("output"))))
 		}
 	case "retry":
-		fmt.Printf("retry  %s\n", line(s("error")))
+		fmt.Printf("%s  %s\n", paint(amber, "retry"), line(s("error")))
 	}
 }
 
@@ -384,10 +392,30 @@ func runs(ctx context.Context, args []string) error {
 		}
 	}
 	list, _, err := c.Runs(ctx, q)
-	for _, r := range list {
-		fmt.Printf("%s  %-28s v%-3d %-9s %-15s %s  %s\n", r.ID, r.Function, r.Version, r.State, r.Failure, r.CreatedAt.Format(time.DateTime), took(r))
+	if err != nil {
+		return err
 	}
-	return err
+	fns, err := c.Functions(ctx)
+	if err != nil {
+		return err
+	}
+	names, width := map[string]string{}, 8
+	for _, f := range fns {
+		names[f.ID] = f.Name
+	}
+	for _, r := range list {
+		width = max(width, len(names[r.Function]))
+	}
+	stateColour := map[string]string{jinn.Succeeded: green, jinn.Failed: red, jinn.Running: cyan, jinn.Queued: dim}
+	for _, r := range list {
+		name := names[r.Function]
+		if name == "" {
+			name = r.Function
+		}
+		fmt.Printf("%s  %-*s v%-3d %s %s  %-7s %s\n", paint(cyan, r.ID), width, name, r.Version,
+			paint(stateColour[r.State], fmt.Sprintf("%-9s", r.State)), r.CreatedAt.Local().Format("2006-01-02 15:04"), took(r), r.Failure)
+	}
+	return nil
 }
 
 func show(ctx context.Context, args []string) error {
@@ -579,15 +607,41 @@ func provider(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("→ %s %s v%d · use %s@latest in a function's provider\n", p.Name, p.ID, p.Version, p.ID)
+	fmt.Printf("%s %s %s v%d · use %s@latest in a function's provider\n", paint(green, "→"), p.Name, paint(cyan, p.ID), p.Version, p.ID)
 	return nil
+}
+
+// Colours, only on a terminal and never with NO_COLOR set.
+const (
+	cyan   = "38;2;92;240;255"
+	violet = "38;2;139;92;255"
+	green  = "38;2;184;255;92"
+	red    = "38;2;255;92;138"
+	amber  = "38;2;255;181;71"
+	dim    = "2"
+)
+
+var colour = func() bool {
+	info, err := os.Stdout.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0 && os.Getenv("NO_COLOR") == "" && os.Getenv("TERM") != "dumb"
+}()
+
+func paint(code, s string) string {
+	if !colour {
+		return s
+	}
+	return "\x1b[" + code + "m" + s + "\x1b[0m"
 }
 
 func took(r jinn.Run) string {
 	if r.StartedAt == nil || r.EndedAt == nil {
 		return ""
 	}
-	return r.EndedAt.Sub(*r.StartedAt).Round(100 * time.Millisecond).String()
+	d := r.EndedAt.Sub(*r.StartedAt)
+	if d >= time.Minute {
+		return d.Round(time.Second).String()
+	}
+	return d.Round(100 * time.Millisecond).String()
 }
 
 func size(n int64) string {
