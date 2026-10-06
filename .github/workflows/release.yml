@@ -1,0 +1,47 @@
+# Builds a release when a version tag (v1.2.3) arrives. This workflow is the
+# only place jinn's binaries are built. Each binary, SHA256SUMS and install.sh
+# get a build provenance attestation, so anyone can check where a file came
+# from: gh attestation verify FILE --repo usejinn/jinn-cli
+#
+# The build is reproducible: Go is 1.25.12, the SDK is a
+# published version, and the flags below leave no paths or build ids. Rebuild
+# the tag with the same command and compare SHA-256s (README, "Verify").
+name: release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write      # the release
+  id-token: write      # the attestations' signing identity
+  attestations: write
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # the tag, so the binary reports its version
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.25.12'
+          cache: false
+      - name: Build
+        env:
+          GOTOOLCHAIN: local # exactly the Go above
+        run: |
+          mkdir dist
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
+            os=${target%/*} arch=${target#*/} ext=""
+            [ "$os" = windows ] && ext=.exe
+            CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath -ldflags="-s -w -buildid=" -o "dist/jinn-$os-$arch$ext" .
+          done
+          cp install.sh dist/
+          (cd dist && sha256sum jinn-* install.sh > SHA256SUMS)
+          cat dist/SHA256SUMS
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: 'dist/*'
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --notes "Install: curl -fsSL https://github.com/usejinn/jinn-cli/releases/latest/download/install.sh | sh. Verify a file: gh attestation verify FILE --repo usejinn/jinn-cli."

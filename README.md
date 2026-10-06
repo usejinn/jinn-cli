@@ -7,10 +7,10 @@ Give an agent a task and a folder. Get files back.
 `jinn` runs a [Jinn](https://usejinn.com) function: an AI agent with the tools, packages and model you chose, working in a fresh Linux VM until the files you asked for exist. You watch each step in your terminal, and the result lands in a folder.
 
 ```sh
-curl -fsSL https://docs.usejinn.com/install.sh | sh
+curl -fsSL https://github.com/usejinn/jinn-cli/releases/latest/download/install.sh | sh
 ```
 
-Or, with Go 1.25+: `go install usejinn.com/jinn@latest`. Builds for Linux, macOS and Windows are on [docs.usejinn.com/cli](https://docs.usejinn.com/cli).
+Or, with Go 1.25+: `go install usejinn.com/jinn@latest`. Builds for Linux, macOS and Windows are on the [releases page](https://github.com/usejinn/jinn-cli/releases).
 
 ## Start
 
@@ -46,6 +46,22 @@ Each publish is a new version, and every run records the version it used. Start 
 | `jinn login`, `jinn bases`, `jinn functions`, `jinn version` | Everything else |
 
 Full reference: [docs.usejinn.com/cli](https://docs.usejinn.com/cli). Jinn is invitation-only for now: write to [support@usejinn.com](mailto:support@usejinn.com).
+
+## Verify
+
+Releases are built only by [this repository's release workflow](.github/workflows/release.yml), and each file has a build provenance attestation:
+
+```sh
+gh attestation verify jinn-linux-amd64 --repo usejinn/jinn-cli
+```
+
+The build is reproducible. Rebuild a tag and compare its SHA-256 with the release's `SHA256SUMS`:
+
+```sh
+git checkout v0.3.0
+GOTOOLCHAIN=go1.25.12 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w -buildid=" -o jinn-linux-amd64 .
+sha256sum jinn-linux-amd64
+```
 
 ---
 
