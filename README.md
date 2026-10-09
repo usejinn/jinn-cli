@@ -47,7 +47,7 @@ Each publish is a new version, and every run records the version it used. Start 
 
 Add `--json` to any command for JSON output, one document or one line per event. Exit statuses tell failures apart: 1 the run failed, 2 wrong usage, 3 the API refused, 4 anything else. See [Use Jinn from an agent](https://docs.usejinn.com/agents).
 
-Full reference: [docs.usejinn.com/cli](https://docs.usejinn.com/cli). Jinn is invitation-only for now: write to [support@usejinn.com](mailto:support@usejinn.com).
+Full reference: [docs.usejinn.com/cli](https://docs.usejinn.com/cli). Sign up at [app.usejinn.com](https://app.usejinn.com).
 
 ## Verify
 
