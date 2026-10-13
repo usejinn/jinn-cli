@@ -766,7 +766,7 @@ func printEvent(e jinn.LogEvent) {
 	case "command":
 		if s("source") == "caller" {
 			args, _ := json.Marshal(e.Fields["arguments"])
-			fmt.Printf("%s  %s %s\n", paint(cyan, "you  "), s("kind"), paint(dim, line(string(args))))
+			fmt.Printf("%s  %s %s\n", paint(cyan, "you  "), s("command"), paint(dim, line(string(args))))
 		}
 	case "image":
 		if s("error") == "" {
