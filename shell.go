@@ -30,8 +30,9 @@ func shell(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	// A terminal that cannot say its size, or says 0 by 0, gets 80 by 24.
 	cols, rows, err := term.GetSize(fd)
-	if err != nil {
+	if err != nil || rows < 1 || cols < 1 {
 		cols, rows = 80, 24
 	}
 	ticket, ch, err := c.OpenTerminal(ctx, args[0], rows, cols, nil)
@@ -60,7 +61,7 @@ func shell(ctx context.Context, args []string) error {
 	defer stopResize()
 	go func() {
 		for range resized {
-			if cols, rows, err := term.GetSize(fd); err == nil {
+			if cols, rows, err := term.GetSize(fd); err == nil && rows > 0 && cols > 0 {
 				size := make([]byte, 4)
 				binary.BigEndian.PutUint16(size, uint16(rows))
 				binary.BigEndian.PutUint16(size[2:], uint16(cols))
