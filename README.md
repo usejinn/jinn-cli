@@ -4,7 +4,7 @@
 
 Give an agent a task and a folder. Get files back.
 
-`jinn` runs a [Jinn](https://usejinn.com) function: an AI agent with the tools, packages and model you chose, working in a fresh Linux VM until the files you asked for exist. You watch each step in your terminal, and the result lands in a folder.
+`jinn` runs a [Jinn](https://usejinn.com) function in a fresh Linux VM. With an agent, the model you chose works with the tools and packages you chose until the files you asked for exist; you watch each step in your terminal, and the result lands in a folder. Without one, the VM is yours: run commands in it, copy files in and out, and keep its disk as an image for the next run.
 
 ```sh
 curl -fsSL https://github.com/usejinn/jinn-cli/releases/latest/download/install.sh | sh
@@ -21,13 +21,13 @@ jinn publish function.json                   # what the agent may use, and what 
 jinn run summarise --prompt "Summarise these notes." --in ./notes --out ./result
 ```
 
-A function is one JSON file: the base and setup commands, the model, the tools, and the files that go in and must come out. The [quickstart](https://docs.usejinn.com/quickstart) has a complete one.
+A function is one JSON file: the image and setup commands, the agent (its model and tools), and the files that go in and must come out. The [quickstart](https://docs.usejinn.com/quickstart) has a complete one.
 
 ## The output is checked
 
 The function names the files a run must return. The agent cannot finish until they exist and fit their size limits. When something is missing, it is told what and carries on.
 
-<img src="assets/review.gif" alt="A pull request review where submit_result is refused until comments.json exists" width="820">
+<img src="assets/review.gif" alt="A pull request review where complete is refused until comments.json exists" width="820">
 
 ## Define once, run from anywhere
 
@@ -35,17 +35,25 @@ Each publish is a new version, and every run records the version it used. Start 
 
 <img src="assets/publish.gif" alt="jinn publish, a detached run and the function's run history" width="820">
 
+## Drive it yourself
+
+A function without an agent starts a VM and waits for you. `jinn exec` runs a command in it and exits with the command's status; `jinn cp` copies files in and out. `jinn finish` ends the run, and a function with `"output_image": true` keeps the disk as an image that the next run can boot.
+
+<img src="assets/machine.gif" alt="jinn run of a function without an agent, jinn cp and jinn exec into it, jinn finish saving an image, and a run from that image" width="820">
+
 ## Commands
 
 | Command | Does |
 |---|---|
-| `jinn run FUNCTION --prompt TEXT [--in DIR] [--out DIR]` | Start a run, follow it, download its output |
+| `jinn run FUNCTION [--prompt TEXT] [--in DIR] [--out DIR] [--image IMG]` | Start a run; follow an agent's run and download its output |
+| `jinn exec RUN -- COMMAND`, `jinn cp`, `jinn finish RUN [--failed REASON]` | Act on a run: run a command, copy files, end it |
 | `jinn runs`, `jinn show RUN`, `jinn logs RUN --follow` | Read runs and their logs |
 | `jinn publish FILE` | Make a function, or publish its next version |
+| `jinn images`, `jinn image rm IMG` | List the account's images and Jinn's bases; delete an image |
 | `jinn providers`, `jinn models VENDOR`, `jinn provider NAME` | Manage model keys (read from stdin) |
-| `jinn login`, `jinn bases`, `jinn functions`, `jinn version` | Everything else |
+| `jinn login`, `jinn functions`, `jinn version` | Everything else |
 
-Add `--json` to any command for JSON output, one document or one line per event. Exit statuses tell failures apart: 1 the run failed, 2 wrong usage, 3 the API refused, 4 anything else. See [Use Jinn from an agent](https://docs.usejinn.com/agents).
+Add `--json` to any command for JSON output, one document or one line per event. Exit statuses tell failures apart: 1 the run failed, 2 wrong usage, 3 the API refused, 4 anything else. `jinn exec` exits with the command's own status, and 125 when Jinn could not run it. See [Use Jinn from an agent](https://docs.usejinn.com/agents).
 
 Full reference: [docs.usejinn.com/cli](https://docs.usejinn.com/cli). Sign up at [app.usejinn.com](https://app.usejinn.com).
 
@@ -60,7 +68,7 @@ gh attestation verify jinn-linux-amd64 --repo usejinn/jinn-cli
 The build is reproducible. Rebuild a tag and compare its SHA-256 with the release's `SHA256SUMS`:
 
 ```sh
-git checkout v0.4.0
+git checkout v1.0.0
 GOTOOLCHAIN=go1.25.12 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w -buildid=" -o jinn-linux-amd64 .
 sha256sum jinn-linux-amd64
 ```

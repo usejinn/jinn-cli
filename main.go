@@ -2,14 +2,18 @@
 // the same API as everything else, through the Go SDK (usejinn.com/go).
 //
 //	jinn login                                   sign this machine in (a person approves it in the console)
-//	jinn bases                                   list the bases a function can boot
 //	jinn functions                               list the account's functions
 //	jinn publish function.json                   make a function, or publish its next version
-//	jinn run NAME|fnc_… -p PROMPT [--in DIR] [--out DIR] [--version N] [--webhook URL] [--ref REF] [--detach]
+//	jinn run NAME|fnc_… [-p PROMPT] [--in DIR] [--out DIR] [--image IMG] [--env K=V]… [--version N] [--webhook URL] [--ref REF] [--detach]
+//	jinn exec run_… [--workdir D] [--timeout T] -- COMMAND…
+//	jinn cp PATH run_…:PATH | run_…:PATH PATH    copy a file into a run, or a file or folder out of one
+//	jinn finish run_… [--failed REASON]          end a run
 //	jinn runs [--function NAME|fnc_…] [--state active|succeeded|failed]
 //	jinn show run_…                              print a run as JSON
 //	jinn logs run_… [--follow]                   print a run's log
 //	jinn output run_… --out DIR                  download a run's output folder
+//	jinn images                                  list the account's images and Jinn's bases
+//	jinn image rm img_…                          delete an image
 //	jinn providers                               list the account's providers
 //	jinn models VENDOR                           list the models a vendor key can use (key on stdin)
 //	jinn provider NAME|prv_… --vendor V --model M [--effort E] [--compact N] [--max-output N]
@@ -36,17 +40,20 @@ import (
 	jinn "usejinn.com/go"
 )
 
-const usage = `jinn: run agent work as a call.
+const usage = `jinn: run functions, and act on their runs.
 
   jinn login
-  jinn bases
   jinn functions
   jinn publish function.json
-  jinn run NAME|fnc_… --prompt PROMPT [--in DIR] [--out DIR] [--version N] [--webhook URL] [--ref REF] [--detach]
+  jinn run NAME|fnc_… [--prompt PROMPT] [--in DIR] [--out DIR] [--image IMG] [--env K=V]… [--version N] [--webhook URL] [--ref REF] [--detach]
+  jinn exec run_… [--workdir D] [--timeout T] -- COMMAND…
+  jinn cp PATH run_…:PATH        jinn cp run_…:PATH PATH
+  jinn finish run_… [--failed REASON]
   jinn runs [--function NAME|fnc_…] [--state active|succeeded|failed]
   jinn show run_…
   jinn logs run_… [--follow]
   jinn output run_… --out DIR
+  jinn images                    jinn image rm img_…
   jinn providers
   jinn models openai|anthropic|xai                 < vendor-key
   jinn provider NAME|prv_… --vendor V --model M [--effort E] [--compact N] [--max-output N]   < vendor-key
@@ -54,6 +61,7 @@ const usage = `jinn: run agent work as a call.
 Vendor keys are read from stdin, never from a flag: echo "$OPENAI_API_KEY" | jinn models openai
 --json (any command): print JSON, one document or one line per event.
 Exit status: 0 done, 1 the run failed, 2 usage, 3 the API refused, 4 anything else.
+jinn exec exits with the command's own status, and 125 when Jinn could not run it.
 The key comes from JINN_KEY, else ~/.config/jinn/key. Docs: https://docs.usejinn.com/cli
 `
 
@@ -75,6 +83,15 @@ const (
 	exitRefused   = 3
 	exitOther     = 4
 )
+
+// exitStatus is jinn exec's remote command's status: jinn exits with it.
+type exitStatus int
+
+func (e exitStatus) Error() string { return fmt.Sprintf("the command exited with %d", int(e)) }
+
+// exitExecFailed is jinn exec's status when Jinn could not run the command,
+// as docker exec's 125.
+const exitExecFailed = 125
 
 // usageError is a command used wrongly.
 type usageError string
@@ -112,8 +129,6 @@ func main() {
 	switch cmd {
 	case "login":
 		err = login(ctx)
-	case "bases":
-		err = bases(ctx)
 	case "functions":
 		err = functions(ctx)
 	case "publish":
@@ -128,6 +143,16 @@ func main() {
 		err = logs(ctx, args)
 	case "output":
 		err = output(ctx, args)
+	case "exec":
+		err = execCommand(ctx, args)
+	case "cp":
+		err = cp(ctx, args)
+	case "finish":
+		err = finish(ctx, args)
+	case "images":
+		err = images(ctx)
+	case "image":
+		err = image(ctx, args)
 	case "providers":
 		err = providers(ctx)
 	case "models":
@@ -149,6 +174,10 @@ func main() {
 	default:
 		err = usageError(fmt.Sprintf("no command %q; run jinn help", cmd))
 	}
+	var status exitStatus
+	if errors.As(err, &status) {
+		os.Exit(int(status))
+	}
 	if err != nil {
 		code, status, apiCode := exitOther, 0, ""
 		var ue usageError
@@ -157,10 +186,15 @@ func main() {
 		switch {
 		case errors.As(err, &ue):
 			code = exitUsage
+		case cmd == "exec":
+			code = exitExecFailed
 		case errors.As(err, &rf):
 			code = exitRunFailed
 		case errors.As(err, &ae):
 			code, status, apiCode = exitRefused, ae.Status, ae.Code
+		}
+		if errors.As(err, &ae) {
+			status, apiCode = ae.Status, ae.Code
 		}
 		if asJSON {
 			b, _ := json.Marshal(map[string]any{"error": err.Error(), "exit": code, "status": status, "code": apiCode})
@@ -236,22 +270,6 @@ func login(ctx context.Context) error {
 		fmt.Println("Signed in. The key is in", keyFile())
 	}
 	return nil
-}
-
-func bases(ctx context.Context) error {
-	c, err := client()
-	if err != nil {
-		return err
-	}
-	list, err := c.Bases(ctx)
-	if err == nil && asJSON {
-		emit(list)
-		return nil
-	}
-	for _, b := range list {
-		fmt.Printf("%s  %s\n", b.Name, size(b.Bytes))
-	}
-	return err
 }
 
 func functions(ctx context.Context) error {
@@ -340,17 +358,33 @@ func publish(ctx context.Context, args []string) error {
 	return nil
 }
 
+// envFlags collects --env NAME=value, in order.
+type envFlags []jinn.EnvVar
+
+func (e *envFlags) String() string { return "" }
+func (e *envFlags) Set(v string) error {
+	name, value, ok := strings.Cut(v, "=")
+	if !ok || name == "" {
+		return fmt.Errorf("--env takes NAME=value, not %q", v)
+	}
+	*e = append(*e, jinn.EnvVar{Name: name, Value: value})
+	return nil
+}
+
 func run(ctx context.Context, args []string) error {
 	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
-		return usageError("usage: jinn run NAME|fnc_… --prompt PROMPT [--in DIR] [--out DIR]")
+		return usageError("usage: jinn run NAME|fnc_… [--prompt PROMPT] [--in DIR] [--out DIR] [--image IMG] [--env K=V]…")
 	}
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
-	prompt := fs.String("prompt", "", "the agent's first message")
-	fs.StringVar(prompt, "p", "", "the agent's first message")
+	prompt := fs.String("prompt", "", "the agent's task (a function with an agent)")
+	fs.StringVar(prompt, "p", "", "the agent's task (a function with an agent)")
 	in := fs.String("in", "", "the input folder")
 	out := fs.String("out", "", "where to put the output folder")
+	img := fs.String("image", "", "the disk to boot instead of the function's: img_… or a base")
+	var env envFlags
+	fs.Var(&env, "env", "a variable for the run's commands, NAME=value (repeat it)")
 	version := fs.Int("version", 0, "the version (default: the latest)")
-	webhook := fs.String("webhook", "", "where to send the result")
+	webhook := fs.String("webhook", "", "where to send the run's events")
 	ref := fs.String("ref", "", "your id for this run")
 	detach := fs.Bool("detach", false, "print the run's id and return")
 	if err := fs.Parse(args[1:]); err != nil {
@@ -364,7 +398,7 @@ func run(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	req := jinn.RunRequest{Prompt: *prompt, Version: *version, Webhook: *webhook, ExternalReference: *ref}
+	req := jinn.RunRequest{Prompt: *prompt, Version: *version, Image: *img, Environment: env, Webhook: *webhook, ExternalReference: *ref}
 	if *in != "" {
 		if req.Input, err = c.UploadFolder(ctx, *in); err != nil {
 			return err
@@ -386,6 +420,25 @@ func run(ctx context.Context, args []string) error {
 	if *detach {
 		return nil
 	}
+	// A run without an agent is yours to drive: jinn run returns once its
+	// setup has finished, and jinn exec, cp and finish act on it.
+	if !r.Agent {
+		if r, err = c.WaitReady(ctx, r.ID); err != nil {
+			return err
+		}
+		if r.Done() {
+			if asJSON {
+				emit(map[string]any{"type": "run", "run": r})
+			}
+			return runFailed{r}
+		}
+		if asJSON {
+			emit(map[string]any{"type": "run", "run": r})
+		} else {
+			fmt.Printf("%s ready %s\n", paint(green, r.ID), paint(dim, "· jinn finish "+r.ID+" ends it"))
+		}
+		return nil
+	}
 	r, err = follow(ctx, c, r)
 	if err != nil {
 		return err
@@ -396,8 +449,220 @@ func run(ctx context.Context, args []string) error {
 	if !asJSON {
 		fmt.Printf("%s in %s\n", paint(green, "✓ succeeded"), took(r))
 	}
-	if *out != "" {
+	if *out != "" && r.Output != nil && r.Output.URL != "" {
 		return download(ctx, c, r, *out)
+	}
+	return nil
+}
+
+// shellWords joins a command's words for bash, quoting what needs it.
+func shellWords(words []string) string {
+	if len(words) == 1 {
+		return words[0] // one word: already a command line
+	}
+	out := make([]string, len(words))
+	for i, w := range words {
+		if w != "" && strings.Trim(w, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_./=:,@%+") == "" {
+			out[i] = w
+		} else {
+			out[i] = "'" + strings.ReplaceAll(w, "'", `'\''`) + "'"
+		}
+	}
+	return strings.Join(out, " ")
+}
+
+// execCommand runs a command in a run, prints its output as it comes, and
+// exits with its status.
+func execCommand(ctx context.Context, args []string) error {
+	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
+		return usageError("usage: jinn exec run_… [--workdir D] [--timeout T] -- COMMAND…")
+	}
+	fs := flag.NewFlagSet("exec", flag.ContinueOnError)
+	workdir := fs.String("workdir", "", "where it runs (default: /workspace)")
+	timeout := fs.Duration("timeout", 0, "how long it may take (default: 5m; at most 24h)")
+	if err := fs.Parse(args[1:]); err != nil {
+		return usageError(err.Error())
+	}
+	words := fs.Args()
+	if len(words) == 0 {
+		return usageError("usage: jinn exec run_… [--workdir D] [--timeout T] -- COMMAND…")
+	}
+	c, err := client()
+	if err != nil {
+		return err
+	}
+	cmd, err := c.SendCommand(ctx, args[0], jinn.KindBash, jinn.BashArgs{Command: shellWords(words), Workdir: *workdir, TimeoutMS: timeout.Milliseconds()})
+	if err != nil {
+		return err
+	}
+	var after int64
+	for {
+		page, err := c.CommandOutput(ctx, args[0], cmd.ID, after, 25*time.Second)
+		if err != nil {
+			return err
+		}
+		if page.Output != "" {
+			if asJSON {
+				emit(map[string]any{"type": "output", "output": page.Output})
+			} else {
+				fmt.Print(page.Output)
+			}
+		}
+		after = page.Next
+		if page.Done {
+			break
+		}
+	}
+	if cmd, err = c.Command(ctx, args[0], cmd.ID, 0); err != nil {
+		return err
+	}
+	if asJSON {
+		emit(map[string]any{"type": "command", "command": cmd})
+	}
+	if cmd.State != jinn.CommandSucceeded {
+		return fmt.Errorf("the command %s: %s", cmd.State, cmd.Error)
+	}
+	var res jinn.BashResult
+	if err := json.Unmarshal(cmd.Result, &res); err != nil {
+		return err
+	}
+	if res.Error != "" {
+		return errors.New(res.Error)
+	}
+	if res.OutputBytes > after && !asJSON {
+		fmt.Fprintf(os.Stderr, "jinn: %s of output were not kept; the command's result holds its start and end\n", size(res.OutputBytes-after))
+	}
+	if res.TimedOut && !asJSON {
+		fmt.Fprintln(os.Stderr, "jinn: the command did not finish before its timeout")
+	}
+	if res.ExitCode != 0 {
+		return exitStatus(res.ExitCode)
+	}
+	return nil
+}
+
+// remote splits run_…:PATH.
+func remote(arg string) (run, path string, ok bool) {
+	run, path, ok = strings.Cut(arg, ":")
+	return run, path, ok && strings.HasPrefix(run, "run_") && path != ""
+}
+
+// cp copies a file into a run, or a file or folder out of one.
+func cp(ctx context.Context, args []string) error {
+	if len(args) != 2 {
+		return usageError("usage: jinn cp PATH run_…:PATH, or jinn cp run_…:PATH PATH")
+	}
+	c, err := client()
+	if err != nil {
+		return err
+	}
+	if run, path, ok := remote(args[1]); ok {
+		if info, err := os.Stat(args[0]); err != nil {
+			return err
+		} else if info.IsDir() {
+			return errors.New(args[0] + " is a folder: jinn cp sends one file; send a .tar.gz and unpack it with jinn exec")
+		}
+		if err := c.Put(ctx, run, args[0], path); err != nil {
+			return err
+		}
+		if asJSON {
+			emit(map[string]any{"type": "put", "run": run, "path": path})
+		}
+		return nil
+	}
+	run, path, ok := remote(args[0])
+	if !ok {
+		return usageError("one side of jinn cp is run_…:PATH")
+	}
+	folder, err := c.Get(ctx, run, path, args[1])
+	if err != nil {
+		return err
+	}
+	if asJSON {
+		emit(map[string]any{"type": "get", "run": run, "path": path, "folder": folder, "to": args[1]})
+	}
+	return nil
+}
+
+// finish ends a run: succeeded, or failed with a reason.
+func finish(ctx context.Context, args []string) error {
+	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
+		return usageError("usage: jinn finish run_… [--failed REASON]")
+	}
+	fs := flag.NewFlagSet("finish", flag.ContinueOnError)
+	failed := fs.String("failed", "", "end the run as failed, with this reason")
+	if err := fs.Parse(args[1:]); err != nil {
+		return usageError(err.Error())
+	}
+	c, err := client()
+	if err != nil {
+		return err
+	}
+	a := jinn.FinishArgs{State: jinn.Succeeded}
+	if *failed != "" {
+		a = jinn.FinishArgs{State: jinn.Failed, Detail: *failed}
+	}
+	res, err := c.Finish(ctx, args[0], a)
+	if err != nil {
+		return err
+	}
+	if !res.Accepted {
+		if asJSON {
+			emit(res)
+		}
+		return fmt.Errorf("the run's output was not accepted; it goes on:\n  %s", strings.Join(res.Problems, "\n  "))
+	}
+	r, err := c.Wait(ctx, args[0])
+	if err != nil {
+		return err
+	}
+	if asJSON {
+		emit(r)
+	} else {
+		fmt.Println(strings.TrimSpace(fmt.Sprintf("%s %s %s", paint(cyan, r.ID), r.State, r.Failure)))
+		if r.Output != nil && r.Output.Image != "" {
+			fmt.Printf("image %s\n", paint(cyan, r.Output.Image))
+		}
+	}
+	if r.State != jinn.Succeeded && *failed == "" {
+		return runFailed{r}
+	}
+	return nil
+}
+
+func images(ctx context.Context) error {
+	c, err := client()
+	if err != nil {
+		return err
+	}
+	list, err := c.Images(ctx)
+	if err == nil && asJSON {
+		emit(list)
+		return nil
+	}
+	for _, img := range list {
+		from := img.Run
+		if img.Base {
+			from = "base"
+		}
+		fmt.Printf("%-32s %-28s %9s  disk %9s  %s\n", img.ID, from, size(img.Bytes), size(img.DiskBytes), img.CreatedAt.Local().Format("2006-01-02 15:04"))
+	}
+	return err
+}
+
+func image(ctx context.Context, args []string) error {
+	if len(args) != 2 || args[0] != "rm" {
+		return usageError("usage: jinn image rm img_…")
+	}
+	c, err := client()
+	if err != nil {
+		return err
+	}
+	if err := c.DeleteImage(ctx, args[1]); err != nil {
+		return err
+	}
+	if asJSON {
+		emit(map[string]string{"deleted": args[1]})
 	}
 	return nil
 }
@@ -474,7 +739,7 @@ func logLine(e jinn.LogEvent) map[string]any {
 	return line
 }
 
-// printEvent prints what the agent did, one line each.
+// printEvent prints what the run did, one line each.
 func printEvent(e jinn.LogEvent) {
 	s := func(k string) string { v, _ := e.Fields[k].(string); return v }
 	line := func(v string) string {
@@ -498,6 +763,16 @@ func printEvent(e jinn.LogEvent) {
 		}
 	case "retry":
 		fmt.Printf("%s  %s\n", paint(amber, "retry"), line(s("error")))
+	case "command":
+		if s("source") == "caller" {
+			args, _ := json.Marshal(e.Fields["arguments"])
+			fmt.Printf("%s  %s %s\n", paint(cyan, "you  "), s("kind"), paint(dim, line(string(args))))
+		}
+	case "image":
+		if s("error") == "" {
+			b, _ := e.Fields["bytes"].(float64)
+			fmt.Printf("%s  %s\n", paint(dim, "image"), paint(dim, "saved, "+size(int64(b))))
+		}
 	}
 }
 
