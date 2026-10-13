@@ -68,7 +68,7 @@ gh attestation verify jinn-linux-amd64 --repo usejinn/jinn-cli
 The build is reproducible. Rebuild a tag and compare its SHA-256 with the release's `SHA256SUMS`:
 
 ```sh
-git checkout v1.0.0
+git checkout v0.5.0
 GOTOOLCHAIN=go1.25.12 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w -buildid=" -o jinn-linux-amd64 .
 sha256sum jinn-linux-amd64
 ```
