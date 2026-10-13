@@ -46,7 +46,7 @@ A function without an agent starts a VM and waits for you. `jinn exec` runs a co
 | Command | Does |
 |---|---|
 | `jinn run FUNCTION [--prompt TEXT] [--in DIR] [--out DIR] [--image IMG]` | Start a run; follow an agent's run and download its output |
-| `jinn exec RUN -- COMMAND`, `jinn cp`, `jinn finish RUN [--failed REASON]` | Act on a run: run a command, copy files, end it |
+| `jinn exec RUN -- COMMAND`, `jinn cp`, `jinn shell RUN`, `jinn finish RUN [--failed REASON]` | Act on a run: run a command, copy files, open a terminal, end it |
 | `jinn runs`, `jinn show RUN`, `jinn logs RUN --follow` | Read runs and their logs |
 | `jinn publish FILE` | Make a function, or publish its next version |
 | `jinn images`, `jinn image rm IMG` | List the account's images and Jinn's bases; delete an image |
