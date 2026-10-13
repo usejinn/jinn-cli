@@ -7,6 +7,7 @@
 //	jinn run NAME|fnc_… [-p PROMPT] [--in DIR] [--out DIR] [--image IMG] [--env K=V]… [--version N] [--webhook URL] [--ref REF] [--detach]
 //	jinn exec run_… [--workdir D] [--timeout T] -- COMMAND…
 //	jinn cp PATH run_…:PATH | run_…:PATH PATH    copy a file into a run, or a file or folder out of one
+//	jinn shell run_…                             a terminal in a run (a login shell as root)
 //	jinn finish run_… [--failed REASON]          end a run
 //	jinn runs [--function NAME|fnc_…] [--state active|succeeded|failed]
 //	jinn show run_…                              print a run as JSON
@@ -48,6 +49,7 @@ const usage = `jinn: run functions, and act on their runs.
   jinn run NAME|fnc_… [--prompt PROMPT] [--in DIR] [--out DIR] [--image IMG] [--env K=V]… [--version N] [--webhook URL] [--ref REF] [--detach]
   jinn exec run_… [--workdir D] [--timeout T] -- COMMAND…
   jinn cp PATH run_…:PATH        jinn cp run_…:PATH PATH
+  jinn shell run_…
   jinn finish run_… [--failed REASON]
   jinn runs [--function NAME|fnc_…] [--state active|succeeded|failed]
   jinn show run_…
@@ -149,6 +151,8 @@ func main() {
 		err = cp(ctx, args)
 	case "finish":
 		err = finish(ctx, args)
+	case "shell":
+		err = shell(ctx, args)
 	case "images":
 		err = images(ctx)
 	case "image":
