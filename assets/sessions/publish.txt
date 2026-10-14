@@ -1,0 +1,8 @@
+$ jinn publish function.json
+→ monday-report fnc_46fe4135e812538cc27cff0d v3
+$ jinn run monday-report --prompt "Week 40" --in ./in --detach
+run_454fb9d0fee81dc35d8f43a5 queued · monday-report v3
+$ jinn runs --function monday-report
+run_454fb9d0fee81dc35d8f43a5  monday-report v3   running   2026-10-14 10:20
+run_381a1f6621a15deade34d6b0  monday-report v2   succeeded 2026-10-14 09:15  1m30s
+run_b210108893d007a9c9926646  monday-report v1   succeeded 2026-10-07 10:45  1m29s

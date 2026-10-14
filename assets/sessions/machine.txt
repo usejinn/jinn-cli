@@ -1,0 +1,13 @@
+$ jinn run go-sandbox
+run_79ec1de50490a3a5d1fa5a56 queued · go-sandbox v2
+run_79ec1de50490a3a5d1fa5a56 ready · jinn finish run_79ec1de50490a3a5d1fa5a56 ends it
+$ jinn cp ./api.tar.gz run_79ec1de50490a3a5d1fa5a56:api.tar.gz
+$ jinn exec run_79ec1de50490a3a5d1fa5a56 -- 'tar xzf api.tar.gz && cd api && go test ./...'
+ok  	example.com/api/http	0.001s
+ok  	example.com/api/store	0.012s
+$ jinn finish run_79ec1de50490a3a5d1fa5a56
+run_79ec1de50490a3a5d1fa5a56 succeeded
+image img_be0f434c82c1be6242502753
+$ jinn run go-sandbox --image img_be0f434c82c1be6242502753
+run_e5ca77d65692ee775eed5dd8 queued · go-sandbox v2
+run_e5ca77d65692ee775eed5dd8 ready · jinn finish run_e5ca77d65692ee775eed5dd8 ends it

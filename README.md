@@ -1,4 +1,4 @@
-<p align="center"><img src="assets/run.gif" alt="jinn run answering a support ticket: setup, the agent's tool calls, the result folder" width="820"></p>
+<p align="center"><img src="assets/run.gif" alt="jinn run answering a support ticket: the agent's tool calls, then the result folder" width="820"></p>
 
 # jinn
 
@@ -25,9 +25,9 @@ A function is one JSON file: the image and setup commands, the agent (its model 
 
 ## The output is checked
 
-The function names the files a run must return. The agent cannot finish until they exist and fit their size limits. When something is missing, it is told what and carries on.
+The function names the files a run must return. A run cannot finish until they exist and fit their size limits. When something is missing, the agent is told what and carries on; `jinn finish` says what, and the run goes on.
 
-<img src="assets/review.gif" alt="A pull request review where complete is refused until comments.json exists" width="820">
+<img src="assets/check.gif" alt="jinn finish refused because report.md is missing, then accepted once it exists" width="820">
 
 ## Define once, run from anywhere
 

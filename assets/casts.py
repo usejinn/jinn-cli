@@ -1,13 +1,41 @@
 #!/usr/bin/env python3
-"""Writes the README's terminal recordings as asciinema casts. Every line is
-what the CLI prints, in its colours (cli/main.go); make.sh renders the GIFs.
-The runs are written out, not recorded: a demo needs a model key and takes
-minutes."""
-import json
+"""Writes the README's terminal recordings as asciinema casts; make.sh renders
+the GIFs. Each cast replays sessions/NAME.txt: real runs, as the CLI printed
+them (v0.5.2, 14 October 2026). A line starting "$ " is typed; every other
+line is coloured as cli/main.go colours it. Only the pauses are made up, so a
+demo does not take a run's real minutes."""
+import json, re
 
 CYAN, VIOLET, GREEN, RED, DIM = "38;2;92;240;255", "38;2;139;92;255", "38;2;184;255;92", "38;2;255;92;138", "2"
 def p(code, s): return f"\x1b[{code}m{s}\x1b[0m"
 PROMPT = p(VIOLET, "❯") + " "
+STATE = {"succeeded": GREEN, "failed": RED, "running": CYAN, "queued": DIM}
+
+def paint(line):
+    """Colours one line of the CLI's output as the CLI does."""
+    if m := re.fullmatch(r"(run_\w+) (queued) (· .*)", line):
+        return p(CYAN, m[1]) + " queued " + p(DIM, m[3])
+    if m := re.fullmatch(r"(run_\w+) running", line):
+        return p(CYAN, m[1]) + " running"
+    if m := re.fullmatch(r"(run_\w+) ready (· .*)", line):
+        return p(GREEN, m[1]) + " ready " + p(DIM, m[2])
+    if m := re.fullmatch(r"(run_\w+) (succeeded|failed)(.*)", line):
+        return p(CYAN, m[1]) + " " + m[2] + m[3]
+    if m := re.fullmatch(r"(run_\w+)(  \S+ +v\S+ +)(\w+ *)(.*)", line):
+        return p(CYAN, m[1]) + m[2] + p(STATE[m[3].strip()], m[3]) + m[4]
+    if m := re.fullmatch(r"agent  (\S+) (.*)", line):
+        return p(VIOLET, "agent") + "  " + m[1] + " " + p(DIM, m[2])
+    if m := re.fullmatch(r"( +\S+ → )(.*)", line):
+        return m[1] + p(RED, m[2])
+    if m := re.fullmatch(r"setup  (.*)", line):
+        return p(DIM, "setup") + "  " + p(DIM, m[1])
+    if m := re.fullmatch(r"✓ succeeded( in .*)", line):
+        return p(GREEN, "✓ succeeded") + m[1]
+    if m := re.fullmatch(r"→ (\S+) (\S+) (v\d+)", line):
+        return p(GREEN, "→") + f" {m[1]} " + p(CYAN, m[2]) + f" {m[3]}"
+    if m := re.fullmatch(r"image (img_\w+)", line):
+        return "image " + p(CYAN, m[1])
+    return line
 
 class Cast:
     def __init__(self, rows):
@@ -18,10 +46,8 @@ class Cast:
     def type(self, cmd, then=0.5):
         self.out(PROMPT, 0.2)
         for ch in cmd:
-            self.out(ch, 0.035)
+            self.out(ch, 0.03)
         self.out("\r\n", 0.35 + then)
-    def line(self, s, wait=0.35):
-        self.out(s + "\r\n", wait)
     def write(self, path, end=3.0):
         self.out("", end)
         with open(path, "w") as f:
@@ -29,81 +55,21 @@ class Cast:
             for e in self.events:
                 f.write(json.dumps(e) + "\n")
 
-def agent(s): return p(VIOLET, "agent") + "  " + s
-def tool(name, args): return agent(name + " " + p(DIM, args))
-def setup(cmd, code=0): return p(DIM, "setup") + "  " + p(DIM, cmd) + "  " + p(DIM, f"→ {code}")
+def pause(line):
+    """How long the replay waits before a line: a run's steps take a moment."""
+    if re.fullmatch(r"run_\w+ (running|ready .*)", line) or line.startswith("image "):
+        return 1.8
+    if line.startswith(("agent  ", "jinn: ", "✓ ")) or re.fullmatch(r"run_\w+ (succeeded|failed).*", line):
+        return 1.2
+    return 0.25
 
-# 1. A support ticket in, a reply and refunds out.
-run = "run_7c41e0a9d2b35f8e61c09a4d"
-c = Cast(19)
-c.type('jinn run support-triage --prompt "Ticket #4812: charged twice" --in ./ticket --out ./result')
-c.line(p(CYAN, run) + " queued " + p(DIM, "· support-triage v14"), 0.6)
-c.line(p(CYAN, run) + " running", 2.2)
-c.line(setup("apt-get install -y --no-install-recommends poppler-utils"), 1.4)
-c.line(tool("read", '{"path":"/workspace/in/ticket.json"}'), 1.2)
-c.line(tool("lookup_customer", '{"email":"maya@northwind.example"}'), 1.0)
-c.line(tool("bash", '{"command":"jq \'.charges[] | select(.amount == 2900)\' charges.json"}'), 1.2)
-c.line(agent("Two charges for £29.00, 2 seconds apart. A double submit; refund the second."), 1.4)
-c.line(tool("write", '{"path":"/workspace/out/reply.md"}'), 1.0)
-c.line(tool("write", '{"path":"/workspace/out/actions.json"}'), 0.8)
-c.line(tool("complete", "{}"), 0.9)
-c.line(p(GREEN, "✓ succeeded") + " in 38.4s", 1.0)
-c.line("result/reply.md 1.2 KB", 0.3)
-c.line("result/actions.json 86 B", 0.2)
-c.type("cat result/actions.json", 0.2)
-c.line('[{"charge": "ch_3Q8kd2", "amount": 2900, "reason": "duplicate"}]', 0.1)
-c.write("run.cast", 4.0)
-
-# 2. The output manifest holds the agent to its job.
-run = "run_b20f6d1e94a7c3580e2d7f16"
-c = Cast(15)
-c.type('jinn run pr-review --prompt "Review #318" --in ./pr --out ./review')
-c.line(p(CYAN, run) + " queued " + p(DIM, "· pr-review v6"), 0.6)
-c.line(p(CYAN, run) + " running", 1.0)
-c.line(setup("apt-get install -y --no-install-recommends golang-go"), 1.6)
-c.line(tool("bash", '{"command":"cd /workspace/in/repo && git apply ../change.diff && go test ./..."}'), 1.2)
-c.line(agent("TestClaimExpired fails: the deadline compares local time with UTC."), 1.6)
-c.line(tool("write", '{"path":"/workspace/out/review.md"}'), 1.0)
-c.line(tool("complete", "{}"), 0.9)
-c.line("       complete → " + p(RED, '{"accepted":false,"problems":["comments.json: missing"]}'), 0.7)
-c.line(tool("write", '{"path":"/workspace/out/comments.json"}'), 1.4)
-c.line(tool("complete", "{}"), 0.9)
-c.line(p(GREEN, "✓ succeeded") + " in 4m12s", 1.0)
-c.line("review/comments.json 2.1 KB", 0.3)
-c.line("review/review.md 4.8 KB", 0.2)
-c.write("review.cast", 4.0)
-
-# 3. Define once; call it from anything.
-c = Cast(11)
-c.type("jinn publish function.json")
-c.line(p(GREEN, "→") + " monday-report " + p(CYAN, "fnc_9a3e17c25b0d48f6e2a71c34") + " v3", 0.7)
-c.type('jinn run monday-report --prompt "Week 40" --in ./exports --detach', 0.3)
-c.line(p(CYAN, "run_e5c80a2f71d93b46a0c1e8d5") + " queued " + p(DIM, "· monday-report v3"), 0.6)
-c.type("jinn runs --function monday-report", 0.3)
-rows = [
-    ("run_e5c80a2f71d93b46a0c1e8d5", "v3", CYAN, "running  ", "2026-10-05 09:00", ""),
-    ("run_0b7d24e9c1a65f38d2e0b917", "v2", GREEN, "succeeded", "2026-09-28 09:00", "3m41s"),
-    ("run_6f1a93c0e8d27b54a9c3f0e1", "v2", GREEN, "succeeded", "2026-09-21 09:00", "4m2s"),
-    ("run_c2e7b05d91f84a36e0d1b7a9", "v1", RED, "failed   ", "2026-09-14 09:00", "15m0s", "timeout"),
-]
-for r in rows:
-    c.line(f"{p(CYAN, r[0])}  monday-report v{r[1][1:]:<3} {p(r[2], r[3])} {r[4]}  {r[5]:<7} {r[6] if len(r) > 6 else ''}".rstrip(), 0.08)
-c.write("publish.cast", 4.0)
-
-# 4. No agent: a machine you drive, and its disk kept as an image.
-run, img = "run_3d9e1c07a5b28f64e0d71c92", "img_8b2f04d6e1a93c75f0e2d418"
-c = Cast(15)
-c.type("jinn run go-sandbox")
-c.line(p(CYAN, run) + " queued " + p(DIM, "· go-sandbox v2"), 0.6)
-c.line(p(GREEN, run) + " ready " + p(DIM, f"· jinn finish {run} ends it"), 2.4)
-c.type(f"jinn cp ./api.tar.gz {run}:api.tar.gz", 0.6)
-c.type(f"jinn exec {run} -- 'tar xzf api.tar.gz && cd api && go test ./...'", 0.4)
-c.line("ok  \texample.com/api/store\t1.204s", 2.6)
-c.line("ok  \texample.com/api/http\t0.588s", 0.5)
-c.type(f"jinn finish {run}", 0.4)
-c.line(p(CYAN, run) + " succeeded", 3.2)
-c.line("image " + p(CYAN, img), 0.1)
-c.type(f"jinn run go-sandbox --image {img}", 0.3)
-c.line(p(CYAN, "run_a07c5e2d9f13b84c6e0d27f5") + " queued " + p(DIM, "· go-sandbox v2"), 0.6)
-c.line(p(GREEN, "run_a07c5e2d9f13b84c6e0d27f5") + " ready " + p(DIM, "· jinn finish run_a07c5e2d9f13b84c6e0d27f5 ends it"), 2.0)
-c.write("machine.cast", 4.0)
+# Each cast: its name, which the README's GIF is named after, and its height.
+for name, rows in [("run", 26), ("check", 14), ("publish", 12), ("machine", 18)]:
+    c = Cast(rows)
+    with open(f"sessions/{name}.txt") as f:
+        for line in f.read().rstrip("\n").split("\n"):
+            if line.startswith("$ "):
+                c.type(line[2:], 0.3)
+            else:
+                c.out(paint(line) + "\r\n", pause(line))
+    c.write(f"{name}.cast", 4.0)

@@ -1,0 +1,19 @@
+$ jinn run support-triage --prompt "Ticket #4812: charged twice" --in ./in --out ./result
+run_ff688444f59aa6c23434d90f queued · support-triage v10
+run_ff688444f59aa6c23434d90f running
+agent  bash {"command":"cat /workspace/in/ticket.json && printf '\\n---POLICY---\\n' && cat /workspace/in/policy.md; mkdir -p /workspace/out","timeout_ms":300000,"workdi…
+agent  lookup_customer {"email":"maria.lopez@brightpath.io"}
+agent  write {"content":"Hi Maria,\n\nI confirmed that the two October 1 charges are duplicates. I’ve arranged a full refund of one $348 charge to the same card; it sho…
+agent  write {"content":"[\n {\n \"charge\": \"ch_3Q8xK22\",\n \"amount\": 348,\n \"reason\": \"Duplicate October Team plan charge\"\n }\n]","file_path":"/workspace/out/a…
+agent  complete {}
+✓ succeeded in 14.6s
+result/actions.json 109 B
+result/reply.md 523 B
+$ cat result/actions.json
+[
+  {
+    "charge": "ch_3Q8xK22",
+    "amount": 348,
+    "reason": "Duplicate October Team plan charge"
+  }
+]
