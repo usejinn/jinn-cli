@@ -6,3 +6,5 @@ golang.org/x/term v0.36.0 h1:zMPR+aF8gfksFprF/Nc/rd1wRS1EI6nDBGyWAvDzx2Q=
 golang.org/x/term v0.36.0/go.mod h1:Qu394IJq6V6dCBRgwqshf3mPF85AqzYEzofzRdZkWss=
 usejinn.com/go v0.5.1 h1:1L5yhN1PR9f31YgRXxD0b65yvhl2jOsOXi66wX3K11M=
 usejinn.com/go v0.5.1/go.mod h1:sldSkrcMn0WuEMnCAJBE8SU1O4U+55xQvg0nB/JPsVg=
+usejinn.com/go v0.5.2 h1:0Bwk87e3u76+Uzxmx2ROwBXNfNro1pdktubxaadV3Tg=
+usejinn.com/go v0.5.2/go.mod h1:sldSkrcMn0WuEMnCAJBE8SU1O4U+55xQvg0nB/JPsVg=
