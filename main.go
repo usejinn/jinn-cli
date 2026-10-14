@@ -3,6 +3,7 @@
 //
 //	jinn login                                   sign this machine in (a person approves it in the console)
 //	jinn functions                               list the account's functions
+//	jinn function rm NAME|fnc_…                  delete a function, its versions and their secrets
 //	jinn publish function.json                   make a function, or publish its next version
 //	jinn run NAME|fnc_… [-p PROMPT] [--in DIR] [--out DIR] [--image IMG] [--env K=V]… [--version N] [--webhook URL] [--ref REF] [--detach]
 //	jinn exec run_… [--workdir D] [--timeout T] -- COMMAND…
@@ -44,7 +45,7 @@ import (
 const usage = `jinn: run functions, and act on their runs.
 
   jinn login
-  jinn functions
+  jinn functions                 jinn function rm NAME|fnc_…
   jinn publish function.json
   jinn run NAME|fnc_… [--prompt PROMPT] [--in DIR] [--out DIR] [--image IMG] [--env K=V]… [--version N] [--webhook URL] [--ref REF] [--detach]
   jinn exec run_… [--workdir D] [--timeout T] -- COMMAND…
@@ -133,6 +134,8 @@ func main() {
 		err = login(ctx)
 	case "functions":
 		err = functions(ctx)
+	case "function":
+		err = function(ctx, args)
 	case "publish":
 		err = publish(ctx, args)
 	case "run":
@@ -652,6 +655,28 @@ func images(ctx context.Context) error {
 		fmt.Printf("%-32s %-28s %9s  disk %9s  %s\n", img.ID, from, size(img.Bytes), size(img.DiskBytes), img.CreatedAt.Local().Format("2006-01-02 15:04"))
 	}
 	return err
+}
+
+// function deletes a function, by name or id. Its runs and their images stay.
+func function(ctx context.Context, args []string) error {
+	if len(args) != 2 || args[0] != "rm" {
+		return usageError("usage: jinn function rm NAME|fnc_…")
+	}
+	c, err := client()
+	if err != nil {
+		return err
+	}
+	id, err := functionID(ctx, c, args[1])
+	if err != nil {
+		return err
+	}
+	if err := c.DeleteFunction(ctx, id); err != nil {
+		return err
+	}
+	if asJSON {
+		emit(map[string]string{"deleted": id})
+	}
+	return nil
 }
 
 func image(ctx context.Context, args []string) error {
