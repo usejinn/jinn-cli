@@ -64,7 +64,7 @@ def pause(line):
     return 0.25
 
 # Each cast: its name, which the README's GIF is named after, and its height.
-for name, rows in [("run", 26), ("check", 14), ("publish", 12), ("machine", 18)]:
+for name, rows in [("run", 24), ("check", 14), ("publish", 12), ("machine", 18)]:
     c = Cast(rows)
     with open(f"sessions/{name}.txt") as f:
         for line in f.read().rstrip("\n").split("\n"):
