@@ -50,7 +50,7 @@ A function without an agent starts a VM and waits for you. `jinn exec` runs a co
 | `jinn runs`, `jinn show RUN`, `jinn logs RUN --follow` | Read runs and their logs |
 | `jinn publish FILE`, `jinn function rm FUNCTION` | Make a function, or publish its next version; delete a function |
 | `jinn images`, `jinn image rm IMG` | List the account's images and Jinn's bases; delete an image |
-| `jinn providers`, `jinn models VENDOR`, `jinn provider NAME` | Manage model keys (read from stdin) |
+| `jinn providers`, `jinn models VENDOR`, `jinn provider NAME`, `jinn provider rm PROVIDER` | Manage model keys (read from stdin); delete a provider no function uses |
 | `jinn login`, `jinn functions`, `jinn version` | Everything else |
 
 Add `--json` to any command for JSON output, one document or one line per event. Exit statuses tell failures apart: 1 the run failed, 2 wrong usage, 3 the API refused, 4 anything else. `jinn exec` exits with the command's own status, and 125 when Jinn could not run it. See [Use Jinn from an agent](https://docs.usejinn.com/agents).

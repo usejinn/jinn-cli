@@ -20,6 +20,7 @@
 //	jinn models VENDOR                           list the models a vendor key can use (key on stdin)
 //	jinn provider NAME|prv_… --vendor V --model M [--effort E] [--compact N] [--max-output N]
 //	                                             make a provider, or publish its next version (key on stdin)
+//	jinn provider rm NAME|prv_…                  delete a provider no function uses
 //
 // The key comes from JINN_KEY, else ~/.config/jinn/key (jinn login writes it).
 // JINN_API changes the API's address.
@@ -60,6 +61,7 @@ const usage = `jinn: run functions, and act on their runs.
   jinn providers
   jinn models openai|anthropic|xai                 < vendor-key
   jinn provider NAME|prv_… --vendor V --model M [--effort E] [--compact N] [--max-output N]   < vendor-key
+  jinn provider rm NAME|prv_…
 
 Vendor keys are read from stdin, never from a flag: echo "$OPENAI_API_KEY" | jinn models openai
 --json (any command): print JSON, one document or one line per event.
@@ -165,7 +167,11 @@ func main() {
 	case "models":
 		err = models(ctx, args)
 	case "provider":
-		err = provider(ctx, args)
+		if len(args) > 0 && args[0] == "rm" {
+			err = providerRm(ctx, args)
+		} else {
+			err = provider(ctx, args)
+		}
 	case "version", "--version":
 		v := "(built from source)"
 		if bi, ok := debug.ReadBuildInfo(); ok && bi.Main.Version != "" && bi.Main.Version != "(devel)" {
@@ -671,6 +677,28 @@ func function(ctx context.Context, args []string) error {
 		return err
 	}
 	if err := c.DeleteFunction(ctx, id); err != nil {
+		return err
+	}
+	if asJSON {
+		emit(map[string]string{"deleted": id})
+	}
+	return nil
+}
+
+// providerRm deletes a provider that no function uses, by name or id.
+func providerRm(ctx context.Context, args []string) error {
+	if len(args) != 2 {
+		return usageError("usage: jinn provider rm NAME|prv_…")
+	}
+	c, err := client()
+	if err != nil {
+		return err
+	}
+	id, err := providerID(ctx, c, args[1])
+	if err != nil {
+		return err
+	}
+	if err := c.DeleteProvider(ctx, id); err != nil {
 		return err
 	}
 	if asJSON {
