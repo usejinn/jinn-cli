@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"os"
+	"strconv"
 	"sync"
 
 	"github.com/coder/websocket"
@@ -30,11 +31,7 @@ func shell(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	// A terminal that cannot say its size, or says 0 by 0, gets 80 by 24.
-	cols, rows, err := term.GetSize(fd)
-	if err != nil || rows < 1 || cols < 1 {
-		cols, rows = 80, 24
-	}
+	rows, cols := termSize()
 	ticket, ch, err := c.OpenTerminal(ctx, args[0], rows, cols, nil)
 	if err != nil {
 		return err
@@ -56,17 +53,21 @@ func shell(ctx context.Context, args []string) error {
 		defer mu.Unlock()
 		return conn.Write(ctx, websocket.MessageBinary, ch.Seal(kind, data))
 	}
+	// Each change of size goes to the shell, as a resize frame.
 	resized := make(chan struct{}, 1)
 	stopResize := notifyResize(resized)
 	defer stopResize()
 	go func() {
 		for range resized {
-			if cols, rows, err := term.GetSize(fd); err == nil && rows > 0 && cols > 0 {
-				size := make([]byte, 4)
-				binary.BigEndian.PutUint16(size, uint16(rows))
-				binary.BigEndian.PutUint16(size[2:], uint16(cols))
-				_ = send(jinn.FrameResize, size)
+			r, c := termSize()
+			if r == rows && c == cols {
+				continue
 			}
+			rows, cols = r, c
+			size := make([]byte, 4)
+			binary.BigEndian.PutUint16(size, uint16(rows))
+			binary.BigEndian.PutUint16(size[2:], uint16(cols))
+			_ = send(jinn.FrameResize, size)
 		}
 	}()
 	go func() {
@@ -104,3 +105,20 @@ func shell(ctx context.Context, args []string) error {
 }
 
 func jinnRun(s string) bool { return len(s) == 28 && s[:4] == "run_" }
+
+// termSize is the terminal's size, as the run's shell gets it: stdin's, else
+// stdout's, else $LINES and $COLUMNS, else 24 by 80. A terminal command takes
+// at most 1,000 a side.
+func termSize() (rows, cols int) {
+	for _, f := range []*os.File{os.Stdin, os.Stdout} {
+		if c, r, err := term.GetSize(int(f.Fd())); err == nil && r > 0 && c > 0 {
+			return min(r, 1000), min(c, 1000)
+		}
+	}
+	r, _ := strconv.Atoi(os.Getenv("LINES"))
+	c, _ := strconv.Atoi(os.Getenv("COLUMNS"))
+	if r > 0 && c > 0 {
+		return min(r, 1000), min(c, 1000)
+	}
+	return 24, 80
+}
