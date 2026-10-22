@@ -3,6 +3,12 @@
 # get a build provenance attestation, so anyone can check where a file came
 # from: gh attestation verify FILE --repo usejinn/jinn-cli
 #
+# It also signs the release: Ed25519 over "jinn-cli <tag>\n" and SHA256SUMS,
+# with the key in the release environment's JINN_RELEASE_KEY secret (the
+# environment admits only v* tags). jinn update checks the signature against
+# release-key.pem, the public half, which the binary embeds. No release goes
+# out unsigned, or signed by a key other than release-key.pem's.
+#
 # The build is reproducible: Go is 1.25.12, the SDK is a
 # published version, and the flags below leave no paths or build ids. Rebuild
 # the tag with the same command and compare SHA-256s (README, "Verify").
@@ -17,6 +23,7 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-24.04
+    environment: release
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -38,6 +45,19 @@ jobs:
           cp install.sh dist/
           (cd dist && sha256sum jinn-* install.sh > SHA256SUMS)
           cat dist/SHA256SUMS
+      - name: Sign
+        env:
+          JINN_RELEASE_KEY: ${{ secrets.JINN_RELEASE_KEY }}
+        run: |
+          [ -n "$JINN_RELEASE_KEY" ] || { echo "JINN_RELEASE_KEY is not set: no release goes out unsigned"; exit 1; }
+          umask 077
+          printf '%s\n' "$JINN_RELEASE_KEY" > "$RUNNER_TEMP/key.pem"
+          { printf 'jinn-cli %s\n' "$GITHUB_REF_NAME"; cat dist/SHA256SUMS; } > "$RUNNER_TEMP/signed"
+          openssl pkeyutl -sign -inkey "$RUNNER_TEMP/key.pem" -rawin -in "$RUNNER_TEMP/signed" > "$RUNNER_TEMP/sig"
+          rm "$RUNNER_TEMP/key.pem"
+          openssl pkeyutl -verify -pubin -inkey release-key.pem -rawin -in "$RUNNER_TEMP/signed" -sigfile "$RUNNER_TEMP/sig"
+          base64 -w0 "$RUNNER_TEMP/sig" > dist/SHA256SUMS.sig
+          echo >> dist/SHA256SUMS.sig
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: 'dist/*'
@@ -50,6 +70,8 @@ jobs:
         run: |
           gh release create "$GITHUB_REF_NAME" --draft --verify-tag --title "$GITHUB_REF_NAME" --notes "Install with:
           curl -fsSL https://github.com/usejinn/jinn-cli/releases/latest/download/install.sh | sh
+
+          Update an installed jinn with: jinn update
 
           Check a file's origin with:
           gh attestation verify FILE --repo usejinn/jinn-cli"

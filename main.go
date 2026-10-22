@@ -21,6 +21,7 @@
 //	jinn provider NAME|prv_… --vendor V --model M [--effort E] [--compact N] [--max-output N]
 //	                                             make a provider, or publish its next version (key on stdin)
 //	jinn provider rm NAME|prv_…                  delete a provider no function uses
+//	jinn update                                  replace this binary with the latest signed release
 //
 // The key comes from JINN_KEY, else ~/.config/jinn/key (jinn login writes it).
 // JINN_API changes the API's address.
@@ -36,7 +37,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"runtime/debug"
 	"strings"
 	"time"
 
@@ -62,6 +62,7 @@ const usage = `jinn: run functions, and act on their runs.
   jinn models openai|anthropic|xai                 < vendor-key
   jinn provider NAME|prv_… --vendor V --model M [--effort E] [--compact N] [--max-output N]   < vendor-key
   jinn provider rm NAME|prv_…
+  jinn version                   jinn update
 
 Vendor keys are read from stdin, never from a flag: echo "$OPENAI_API_KEY" | jinn models openai
 --json (any command): print JSON, one document or one line per event.
@@ -172,11 +173,10 @@ func main() {
 		} else {
 			err = provider(ctx, args)
 		}
+	case "update":
+		err = update(ctx, args)
 	case "version", "--version":
-		v := "(built from source)"
-		if bi, ok := debug.ReadBuildInfo(); ok && bi.Main.Version != "" && bi.Main.Version != "(devel)" {
-			v = bi.Main.Version
-		}
+		v := buildVersion()
 		if asJSON {
 			emit(map[string]string{"version": v})
 		} else {

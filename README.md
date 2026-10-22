@@ -10,7 +10,7 @@ Give an agent a task and a folder. Get files back.
 curl -fsSL https://github.com/usejinn/jinn-cli/releases/latest/download/install.sh | sh
 ```
 
-Or, with Go 1.25+: `go install usejinn.com/jinn@latest`. Builds for Linux, macOS and Windows are on the [releases page](https://github.com/usejinn/jinn-cli/releases).
+Update it later with `jinn update`. Or, with Go 1.25+: `go install usejinn.com/jinn@latest`. Builds for Linux, macOS and Windows are on the [releases page](https://github.com/usejinn/jinn-cli/releases).
 
 ## Start
 
@@ -51,6 +51,7 @@ A function without an agent starts a VM and waits for you. `jinn exec` runs a co
 | `jinn publish FILE`, `jinn function rm FUNCTION` | Make a function, or publish its next version; delete a function |
 | `jinn images`, `jinn image rm IMG` | List the account's images and Jinn's bases; delete an image |
 | `jinn providers`, `jinn models VENDOR`, `jinn provider NAME`, `jinn provider rm PROVIDER` | Manage model keys (read from stdin); delete a provider no function uses |
+| `jinn update` | Replace `jinn` with the latest release, once its signature and checksum check out |
 | `jinn login`, `jinn functions`, `jinn version` | Everything else |
 
 Add `--json` to any command for JSON output, one document or one line per event. Exit statuses tell failures apart: 1 the run failed, 2 wrong usage, 3 the API refused, 4 anything else. `jinn exec` exits with the command's own status, and 125 when Jinn could not run it. See [Use Jinn from an agent](https://docs.usejinn.com/agents).
@@ -65,10 +66,12 @@ Releases are built only by [this repository's release workflow](.github/workflow
 gh attestation verify jinn-linux-amd64 --repo usejinn/jinn-cli
 ```
 
+The release workflow also signs each release with Jinn's release key (Ed25519), over the line `jinn-cli VERSION` and `SHA256SUMS`, as `SHA256SUMS.sig`. `jinn update` checks that signature with [`release-key.pem`](release-key.pem), which the binary embeds. [docs.usejinn.com/cli#verify](https://docs.usejinn.com/cli#verify) shows how to check it with OpenSSL.
+
 The build is reproducible. Rebuild a tag and compare its SHA-256 with the release's `SHA256SUMS`:
 
 ```sh
-git checkout v0.5.4
+git checkout v0.6.0
 GOTOOLCHAIN=go1.25.12 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w -buildid=" -o jinn-linux-amd64 .
 sha256sum jinn-linux-amd64
 ```
