@@ -96,7 +96,7 @@ func update(ctx context.Context, args []string) error {
 	}
 	current := buildVersion()
 	if !releaseTag.MatchString(current) {
-		return fmt.Errorf("this jinn (%s) is not a release build, so it cannot update itself; %s", current, installHint)
+		return fmt.Errorf("jinn %s is not a release build, so it cannot update itself; %s", current, installHint)
 	}
 	exe, err := os.Executable()
 	if err == nil {
