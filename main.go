@@ -429,7 +429,9 @@ func run(ctx context.Context, args []string) error {
 	case asJSON:
 		emit(map[string]any{"type": "run", "run": r})
 	default:
-		fmt.Printf("%s queued %s\n", paint(cyan, r.ID), paint(dim, fmt.Sprintf("· %s v%d", args[0], r.Version)))
+		// The run's own state: a start that repeats an Idempotency-Key
+		// returns its first run, which may be running or ended.
+		fmt.Printf("%s %s %s\n", paint(cyan, r.ID), r.State, paint(dim, fmt.Sprintf("· %s v%d", args[0], r.Version)))
 	}
 	if *detach {
 		return nil
@@ -444,7 +446,18 @@ func run(ctx context.Context, args []string) error {
 			if asJSON {
 				emit(map[string]any{"type": "run", "run": r})
 			}
-			return runFailed{r}
+			if r.State != jinn.Succeeded {
+				return runFailed{r}
+			}
+			// Only a repeated Idempotency-Key returns a run that already
+			// succeeded: someone finished it.
+			if !asJSON {
+				fmt.Printf("%s succeeded\n", paint(green, r.ID))
+			}
+			if *out != "" && r.Output != nil && r.Output.URL != "" {
+				return download(ctx, c, r, *out)
+			}
+			return nil
 		}
 		if asJSON {
 			emit(map[string]any{"type": "run", "run": r})
