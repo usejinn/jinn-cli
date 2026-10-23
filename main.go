@@ -5,7 +5,7 @@
 //	jinn functions                               list the account's functions
 //	jinn function rm NAME|fnc_…                  delete a function, its versions and their secrets
 //	jinn publish function.json                   make a function, or publish its next version
-//	jinn run NAME|fnc_… [-p PROMPT] [--in DIR] [--out DIR] [--image IMG] [--env K=V]… [--version N] [--webhook URL] [--ref REF] [--detach]
+//	jinn run NAME|fnc_… [-p PROMPT] [--in DIR] [--out DIR] [--image IMG] [--env K=V]… [--version N] [--webhook URL] [--ref REF] [--idempotency-key KEY] [--detach]
 //	jinn exec run_… [--workdir D] [--timeout T] -- COMMAND…
 //	jinn cp PATH run_…:PATH | run_…:PATH PATH    copy a file into a run, or a file or folder out of one
 //	jinn shell run_…                             a terminal in a run (a login shell as root)
@@ -48,7 +48,7 @@ const usage = `jinn: run functions, and act on their runs.
   jinn login
   jinn functions                 jinn function rm NAME|fnc_…
   jinn publish function.json
-  jinn run NAME|fnc_… [--prompt PROMPT] [--in DIR] [--out DIR] [--image IMG] [--env K=V]… [--version N] [--webhook URL] [--ref REF] [--detach]
+  jinn run NAME|fnc_… [--prompt PROMPT] [--in DIR] [--out DIR] [--image IMG] [--env K=V]… [--version N] [--webhook URL] [--ref REF] [--idempotency-key KEY] [--detach]
   jinn exec run_… [--workdir D] [--timeout T] -- COMMAND…
   jinn cp PATH run_…:PATH        jinn cp run_…:PATH PATH
   jinn shell run_…
@@ -399,6 +399,7 @@ func run(ctx context.Context, args []string) error {
 	version := fs.Int("version", 0, "the version (default: the latest)")
 	webhook := fs.String("webhook", "", "where to send the run's events")
 	ref := fs.String("ref", "", "your id for this run")
+	once := fs.String("idempotency-key", "", "a start of this function with this key in the last 24 hours returns that run instead of a new one")
 	detach := fs.Bool("detach", false, "print the run's id and return")
 	if err := fs.Parse(args[1:]); err != nil {
 		return usageError(err.Error())
@@ -411,7 +412,7 @@ func run(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	req := jinn.RunRequest{Prompt: *prompt, Version: *version, Image: *img, Environment: env, Webhook: *webhook, ExternalReference: *ref}
+	req := jinn.RunRequest{Prompt: *prompt, Version: *version, Image: *img, Environment: env, Webhook: *webhook, ExternalReference: *ref, IdempotencyKey: *once}
 	if *in != "" {
 		if req.Input, err = c.UploadFolder(ctx, *in); err != nil {
 			return err
