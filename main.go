@@ -757,13 +757,12 @@ func download(ctx context.Context, c *jinn.Client, r jinn.Run, dir string) error
 
 // follow prints a run's log as it grows and returns the run once it ends.
 // With --json it prints JSON lines: {"type":"run","run":…} when the run
-// starts and when it ends, and {"type":"log",…} for each log event.
-// follow prints a run's log as it arrives, until the run ends. The host and
-// the agent write their own parts of the log, each when it flushes, so a new
-// part can hold events older than ones already printed: each event is
-// printed once, by what it is, when it first arrives.
+// starts and when it ends, and {"type":"log",…} for each log event. It reads
+// each part of the log once (LogSince). The host and the agent write their
+// own parts, each when it flushes, so a new part can hold events older than
+// ones already printed: each event is printed when it arrives.
 func follow(ctx context.Context, c *jinn.Client, r jinn.Run) (jinn.Run, error) {
-	printed, running := map[string]bool{}, false
+	read, running := map[string]bool{}, false
 	for {
 		var err error
 		if r, err = c.Run(ctx, r.ID); err != nil {
@@ -778,17 +777,11 @@ func follow(ctx context.Context, c *jinn.Client, r jinn.Run) (jinn.Run, error) {
 			}
 		}
 		if running {
-			events, err := c.Log(ctx, r.ID)
+			events, err := c.LogSince(ctx, r.ID, read)
 			if err != nil {
 				return r, err
 			}
 			for _, e := range events {
-				fields, _ := json.Marshal(e.Fields) // map keys come sorted
-				key := e.At.Format(time.RFC3339Nano) + " " + e.Kind + " " + string(fields)
-				if printed[key] {
-					continue
-				}
-				printed[key] = true
 				if asJSON {
 					emit(logLine(e))
 				} else {
