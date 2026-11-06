@@ -836,6 +836,9 @@ func printEvent(e jinn.LogEvent) {
 		}
 	case "retry":
 		fmt.Printf("%s  %s\n", paint(amber, "retry"), line(s("error")))
+	case "step_retry":
+		waited, _ := e.Fields["waited_seconds"].(float64)
+		fmt.Printf("%s  %s\n", paint(amber, "retry"), fmt.Sprintf("Jinn took the step again after %s: its first attempt did not finish", time.Duration(waited)*time.Second))
 	case "command":
 		if s("source") == "caller" {
 			args, _ := json.Marshal(e.Fields["arguments"])
