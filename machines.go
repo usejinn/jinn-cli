@@ -1,0 +1,454 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"flag"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+
+	jinn "usejinn.com/go"
+)
+
+// ── SSH keys ─────────────────────────────────────────────────────────
+
+func sshKeys(ctx context.Context) error {
+	c, err := client()
+	if err != nil {
+		return err
+	}
+	list, err := c.SSHKeys(ctx)
+	if err != nil {
+		return err
+	}
+	if asJSON {
+		emit(list)
+		return nil
+	}
+	for _, k := range list {
+		fmt.Printf("%-28s %-24s %-52s %s\n", k.ID, k.Name, k.Fingerprint, k.CreatedAt.Local().Format("2006-01-02 15:04"))
+	}
+	return nil
+}
+
+func sshKey(ctx context.Context, args []string) error {
+	if len(args) == 0 {
+		return usageError("usage: jinn ssh-key init|add|rm …")
+	}
+	switch args[0] {
+	case "init":
+		return sshKeyInit(ctx, args[1:])
+	case "add":
+		return sshKeyAdd(ctx, args[1:])
+	case "rm":
+		if len(args) != 2 {
+			return usageError("usage: jinn ssh-key rm ssh_…")
+		}
+		c, err := client()
+		if err != nil {
+			return err
+		}
+		if err := c.DeleteSSHKey(ctx, args[1]); err != nil {
+			return err
+		}
+		if asJSON {
+			emit(map[string]string{"deleted": args[1]})
+		}
+		return nil
+	default:
+		return usageError("usage: jinn ssh-key init|add|rm …")
+	}
+}
+
+func defaultSSHKeyName() string {
+	host, _ := os.Hostname()
+	name := strings.TrimSpace(host)
+	if name == "" {
+		return "default"
+	}
+	if len(name) > 80 {
+		name = name[:80]
+	}
+	return name
+}
+
+func sshKeyInit(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("ssh-key init", flag.ContinueOnError)
+	name := fs.String("name", defaultSSHKeyName(), "name for this SSH key in Jinn")
+	if err := fs.Parse(args); err != nil {
+		return usageError(err.Error())
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+	sshDir := filepath.Join(home, ".ssh")
+	privPath := filepath.Join(sshDir, "id_ed25519")
+	pubPath := privPath + ".pub"
+	created := false
+	if _, err := os.Stat(pubPath); errors.Is(err, os.ErrNotExist) {
+		if _, err := os.Stat(privPath); err == nil {
+			return fmt.Errorf("%s exists without %s; pass a public key file to jinn ssh-key add", privPath, pubPath)
+		}
+		if err := os.MkdirAll(sshDir, 0o700); err != nil {
+			return err
+		}
+		gen := exec.CommandContext(ctx, "ssh-keygen", "-t", "ed25519", "-f", privPath, "-N", "", "-C", *name)
+		gen.Stdout = os.Stderr
+		gen.Stderr = os.Stderr
+		if err := gen.Run(); err != nil {
+			return fmt.Errorf("ssh-keygen failed: %w", err)
+		}
+		created = true
+	}
+	return uploadSSHKey(ctx, pubPath, *name, created)
+}
+
+func sshKeyAdd(ctx context.Context, args []string) error {
+	var pubPath string
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		pubPath = args[0]
+		args = args[1:]
+	}
+	fs := flag.NewFlagSet("ssh-key add", flag.ContinueOnError)
+	name := fs.String("name", defaultSSHKeyName(), "name for this SSH key in Jinn")
+	if err := fs.Parse(args); err != nil {
+		return usageError(err.Error())
+	}
+	if fs.NArg() == 1 && pubPath == "" {
+		pubPath = fs.Arg(0)
+	} else if fs.NArg() > 0 {
+		return usageError("usage: jinn ssh-key add [FILE] [--name NAME]")
+	}
+	if pubPath == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return err
+		}
+		for _, candidate := range []string{"id_ed25519.pub", "id_ecdsa.pub", "id_rsa.pub"} {
+			p := filepath.Join(home, ".ssh", candidate)
+			if _, err := os.Stat(p); err == nil {
+				pubPath = p
+				break
+			}
+		}
+		if pubPath == "" {
+			return errors.New("no SSH public key found in ~/.ssh; run jinn ssh-key init or pass a .pub file")
+		}
+	}
+	return uploadSSHKey(ctx, pubPath, *name, false)
+}
+
+func uploadSSHKey(ctx context.Context, pubPath, name string, created bool) error {
+	raw, err := os.ReadFile(pubPath)
+	if err != nil {
+		return err
+	}
+	c, err := client()
+	if err != nil {
+		return err
+	}
+	k, err := c.AddSSHKey(ctx, jinn.SSHKeyRequest{Name: name, PublicKey: strings.TrimSpace(string(raw))})
+	if err != nil {
+		var ae *jinn.Error
+		if errors.As(err, &ae) && ae.Code == "ssh_key_exists" {
+			if asJSON {
+				emit(map[string]any{"status": "exists", "path": pubPath, "error": ae.Message})
+			} else {
+				fmt.Printf("%s %s is already registered in Jinn\n", paint(green, "✓"), pubPath)
+			}
+			return nil
+		}
+		return err
+	}
+	if asJSON {
+		emit(k)
+		return nil
+	}
+	if created {
+		fmt.Printf("%s generated %s\n", paint(green, "✓"), strings.TrimSuffix(pubPath, ".pub"))
+	}
+	fmt.Printf("%s added %s (%s) %s\n", paint(green, "✓"), k.Name, paint(cyan, k.ID), paint(dim, k.Fingerprint))
+	return nil
+}
+
+// ── Machines ─────────────────────────────────────────────────────────
+
+func machines(ctx context.Context) error {
+	c, err := client()
+	if err != nil {
+		return err
+	}
+	list, err := c.Machines(ctx)
+	if err != nil {
+		return err
+	}
+	if asJSON {
+		emit(list)
+		return nil
+	}
+	for _, m := range list {
+		name := m.Name
+		if name == "" {
+			name = "-"
+		}
+		fmt.Printf("%-28s %-20s %-18s %-8s %-3s %s\n", m.ID, m.Slug, name, m.State, m.Size, m.SSH)
+	}
+	return nil
+}
+
+func machine(ctx context.Context, args []string) error {
+	if len(args) == 0 {
+		return usageError("usage: jinn machine create|show|start|stop|resize|snapshot|rm …")
+	}
+	switch args[0] {
+	case "create":
+		return machineCreate(ctx, args[1:])
+	case "show":
+		return machineShow(ctx, args[1:])
+	case "start":
+		return machineStart(ctx, args[1:])
+	case "stop":
+		return machineStop(ctx, args[1:])
+	case "resize":
+		return machineResize(ctx, args[1:])
+	case "snapshot":
+		return machineSnapshot(ctx, args[1:])
+	case "rm":
+		return machineRm(ctx, args[1:])
+	default:
+		return usageError("usage: jinn machine create|show|start|stop|resize|snapshot|rm …")
+	}
+}
+
+func machineCreate(ctx context.Context, args []string) error {
+	var name string
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		name = args[0]
+		args = args[1:]
+	}
+	fs := flag.NewFlagSet("machine create", flag.ContinueOnError)
+	size := fs.String("size", "", "machine size: s, m, l or xl (default m)")
+	img := fs.String("image", "", "starting image: img_… or base name")
+	idle := fs.Int("idle", 0, "idle stop timeout in minutes (default 10)")
+	if err := fs.Parse(args); err != nil {
+		return usageError(err.Error())
+	}
+	if fs.NArg() > 0 && name == "" {
+		name = fs.Arg(0)
+	} else if fs.NArg() > 0 {
+		return usageError("usage: jinn machine create [NAME] [--size s|m|l|xl] [--image IMG] [--idle 10]")
+	}
+	c, err := client()
+	if err != nil {
+		return err
+	}
+	m, err := c.CreateMachine(ctx, jinn.MachineRequest{Name: name, Size: *size, Image: *img, IdleMinutes: *idle})
+	if err != nil {
+		return err
+	}
+	if asJSON {
+		emit(m)
+		return nil
+	}
+	fmt.Printf("%s %s %s\n", paint(green, "→"), paint(cyan, m.ID), m.Slug)
+	fmt.Printf("  ssh %s\n", m.SSH)
+	return nil
+}
+
+func machineShow(ctx context.Context, args []string) error {
+	if len(args) != 1 {
+		return usageError("usage: jinn machine show NAME|SLUG|mch_…")
+	}
+	c, err := client()
+	if err != nil {
+		return err
+	}
+	m, err := c.Machine(ctx, args[0])
+	if err != nil {
+		return err
+	}
+	if asJSON {
+		emit(m)
+		return nil
+	}
+	fmt.Printf("id:      %s\n", m.ID)
+	fmt.Printf("slug:    %s\n", m.Slug)
+	if m.Name != "" {
+		fmt.Printf("name:    %s\n", m.Name)
+	}
+	fmt.Printf("state:   %s\n", m.State)
+	fmt.Printf("size:    %s\n", m.Size)
+	fmt.Printf("image:   %s\n", m.Image)
+	fmt.Printf("idle:    %dm\n", m.IdleMinutes)
+	fmt.Printf("ssh:     ssh %s\n", m.SSH)
+	if m.ActiveRun != "" {
+		fmt.Printf("run:     %s\n", m.ActiveRun)
+	}
+	return nil
+}
+
+func machineStart(ctx context.Context, args []string) error {
+	if len(args) != 1 {
+		return usageError("usage: jinn machine start NAME|SLUG|mch_…")
+	}
+	c, err := client()
+	if err != nil {
+		return err
+	}
+	m, err := c.StartMachine(ctx, args[0])
+	if err != nil {
+		return err
+	}
+	if asJSON {
+		emit(m)
+		return nil
+	}
+	fmt.Printf("%s %s %s\n", paint(cyan, m.Slug), m.State, paint(dim, m.ActiveRun))
+	return nil
+}
+
+func machineStop(ctx context.Context, args []string) error {
+	if len(args) != 1 {
+		return usageError("usage: jinn machine stop NAME|SLUG|mch_…")
+	}
+	c, err := client()
+	if err != nil {
+		return err
+	}
+	m, err := c.StopMachine(ctx, args[0])
+	if err != nil {
+		return err
+	}
+	if asJSON {
+		emit(m)
+		return nil
+	}
+	fmt.Printf("%s %s\n", paint(cyan, m.Slug), m.State)
+	return nil
+}
+
+func machineResize(ctx context.Context, args []string) error {
+	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
+		return usageError("usage: jinn machine resize NAME|SLUG|mch_… --size s|m|l|xl [--idle N]")
+	}
+	fs := flag.NewFlagSet("machine resize", flag.ContinueOnError)
+	size := fs.String("size", "", "new size: s, m, l or xl")
+	idle := fs.Int("idle", 0, "new idle stop timeout in minutes")
+	rename := fs.String("name", "", "new name")
+	if err := fs.Parse(args[1:]); err != nil {
+		return usageError(err.Error())
+	}
+	var req jinn.MachineUpdateRequest
+	if *size != "" {
+		req.Size = size
+	}
+	if *idle > 0 {
+		req.IdleMinutes = idle
+	}
+	if *rename != "" {
+		req.Name = rename
+	}
+	if req.Size == nil && req.IdleMinutes == nil && req.Name == nil {
+		return usageError("pass --size, --idle or --name")
+	}
+	c, err := client()
+	if err != nil {
+		return err
+	}
+	m, err := c.UpdateMachine(ctx, args[0], req)
+	if err != nil {
+		return err
+	}
+	if asJSON {
+		emit(m)
+		return nil
+	}
+	fmt.Printf("%s %s size=%s idle=%dm\n", paint(cyan, m.Slug), m.State, m.Size, m.IdleMinutes)
+	return nil
+}
+
+func machineSnapshot(ctx context.Context, args []string) error {
+	if len(args) != 1 {
+		return usageError("usage: jinn machine snapshot NAME|SLUG|mch_…")
+	}
+	c, err := client()
+	if err != nil {
+		return err
+	}
+	img, err := c.SnapshotMachine(ctx, args[0])
+	if err != nil {
+		return err
+	}
+	if asJSON {
+		emit(img)
+		return nil
+	}
+	fmt.Printf("%s %s (%s)\n", paint(green, "→"), paint(cyan, img.ID), size(img.Bytes))
+	return nil
+}
+
+func machineRm(ctx context.Context, args []string) error {
+	if len(args) != 1 {
+		return usageError("usage: jinn machine rm NAME|SLUG|mch_…")
+	}
+	c, err := client()
+	if err != nil {
+		return err
+	}
+	if err := c.DeleteMachine(ctx, args[0]); err != nil {
+		return err
+	}
+	if asJSON {
+		emit(map[string]string{"deleted": args[0]})
+	}
+	return nil
+}
+
+func sshConnect(ctx context.Context, args []string) error {
+	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
+		return usageError("usage: jinn ssh NAME|SLUG|mch_…|run_… [--user USER] [-- SSH_ARGS…]")
+	}
+	targetRef := args[0]
+	fs := flag.NewFlagSet("ssh", flag.ContinueOnError)
+	user := fs.String("user", "", "Linux user inside the VM (default root)")
+	if err := fs.Parse(args[1:]); err != nil {
+		return usageError(err.Error())
+	}
+	var dest string
+	if jinnRun(targetRef) {
+		dest = targetRef + "@ssh.usejinn.com"
+	} else {
+		c, err := client()
+		if err != nil {
+			return err
+		}
+		m, err := c.Machine(ctx, targetRef)
+		if err != nil {
+			return err
+		}
+		dest = m.SSH
+		if dest == "" {
+			dest = m.Slug + "@ssh.usejinn.com"
+		}
+	}
+	if *user != "" && *user != "root" {
+		dest = *user + "+" + dest
+	}
+	sshArgs := append([]string{dest}, fs.Args()...)
+	cmd := exec.CommandContext(ctx, "ssh", sshArgs...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			return exitStatus(ee.ExitCode())
+		}
+		return err
+	}
+	return nil
+}

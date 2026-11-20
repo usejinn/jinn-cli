@@ -13,12 +13,11 @@ import (
 	jinn "usejinn.com/go"
 )
 
-// shell opens a terminal in a run: a login shell as root in /workspace,
-// through Jinn's relay, sealed end to end (OpenTerminal). It exits with
-// the shell's status.
+// shell opens a terminal in a run or running machine: a login shell as root in
+// /workspace, through Jinn's SSH relay. It exits with the shell's status.
 func shell(ctx context.Context, args []string) error {
-	if len(args) != 1 || !jinnRun(args[0]) {
-		return usageError("usage: jinn shell run_…")
+	if len(args) != 1 || args[0] == "" {
+		return usageError("usage: jinn shell run_…|MACHINE")
 	}
 	if asJSON {
 		return usageError("jinn shell is interactive; use jinn exec for JSON")
@@ -31,12 +30,17 @@ func shell(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	rows, cols := termSize()
-	ticket, ch, err := c.OpenTerminal(ctx, args[0], rows, cols, nil)
+	var ticket jinn.TerminalTicket
+	if jinnRun(args[0]) {
+		ticket, err = c.OpenTerminal(ctx, args[0])
+	} else {
+		ticket, err = c.OpenMachineTerminal(ctx, args[0])
+	}
 	if err != nil {
 		return err
 	}
-	conn, _, err := websocket.Dial(ctx, ticket.RelayURL+"?route="+ticket.Route+"&side=caller", nil)
+	rows, cols := termSize()
+	conn, _, err := websocket.Dial(ctx, ticket.URL(rows, cols), nil)
 	if err != nil {
 		return err
 	}
@@ -47,11 +51,11 @@ func shell(ctx context.Context, args []string) error {
 		return err
 	}
 	defer term.Restore(fd, old)
-	var mu sync.Mutex // frames are sealed in order, one at a time
-	send := func(kind byte, data []byte) error {
+	var mu sync.Mutex
+	writeFrame := func(frame []byte) error {
 		mu.Lock()
 		defer mu.Unlock()
-		return conn.Write(ctx, websocket.MessageBinary, ch.Seal(kind, data))
+		return conn.Write(ctx, websocket.MessageBinary, frame)
 	}
 	// Each change of size goes to the shell, as a resize frame.
 	resized := make(chan struct{}, 1)
@@ -64,17 +68,14 @@ func shell(ctx context.Context, args []string) error {
 				continue
 			}
 			rows, cols = r, c
-			size := make([]byte, 4)
-			binary.BigEndian.PutUint16(size, uint16(rows))
-			binary.BigEndian.PutUint16(size[2:], uint16(cols))
-			_ = send(jinn.FrameResize, size)
+			_ = writeFrame(jinn.EncodeResizeFrame(rows, cols))
 		}
 	}()
 	go func() {
 		buf := make([]byte, 16<<10)
 		for {
 			n, err := os.Stdin.Read(buf)
-			if n > 0 && send(jinn.FrameInput, buf[:n]) != nil {
+			if n > 0 && writeFrame(jinn.EncodeTerminalFrame(jinn.FrameInput, buf[:n])) != nil {
 				return
 			}
 			if err != nil {
@@ -87,7 +88,7 @@ func shell(ctx context.Context, args []string) error {
 		if err != nil {
 			return errors.New("the terminal closed before its shell exited")
 		}
-		kind, data, err := ch.Open(msg)
+		kind, data, err := jinn.DecodeTerminalFrame(msg)
 		if err != nil {
 			return err
 		}
@@ -95,9 +96,11 @@ func shell(ctx context.Context, args []string) error {
 		case jinn.FrameOutput:
 			_, _ = os.Stdout.Write(data)
 		case jinn.FrameExit:
-			if code := int32(binary.BigEndian.Uint32(data)); code != 0 {
-				term.Restore(fd, old)
-				return exitStatus(code)
+			if len(data) >= 4 {
+				if code := int32(binary.BigEndian.Uint32(data)); code != 0 {
+					term.Restore(fd, old)
+					return exitStatus(code)
+				}
 			}
 			return nil
 		}
@@ -107,8 +110,8 @@ func shell(ctx context.Context, args []string) error {
 func jinnRun(s string) bool { return len(s) == 28 && s[:4] == "run_" }
 
 // termSize is the terminal's size, as the run's shell gets it: stdin's, else
-// stdout's, else $LINES and $COLUMNS, else 24 by 80. A terminal command takes
-// at most 1,000 a side.
+// stdout's, else $LINES and $COLUMNS, else 24 by 80. A terminal takes at most
+// 1,000 a side.
 func termSize() (rows, cols int) {
 	for _, f := range []*os.File{os.Stdin, os.Stdout} {
 		if c, r, err := term.GetSize(int(f.Fd())); err == nil && r > 0 && c > 0 {

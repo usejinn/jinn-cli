@@ -43,15 +43,20 @@ import (
 	jinn "usejinn.com/go"
 )
 
-const usage = `jinn: run functions, and act on their runs.
+const usage = `jinn: run functions, manage machines, and act on runs.
 
   jinn login
+  jinn machines                  jinn machine create [NAME] [--size s|m|l|xl] [--image IMG] [--idle 10]
+  jinn machine show|start|stop|snapshot|rm NAME|SLUG|mch_…
+  jinn machine resize NAME|SLUG|mch_… --size s|m|l|xl [--idle N]
+  jinn ssh NAME|SLUG|mch_…|run_… [--user USER] [-- SSH_ARGS…]
+  jinn ssh-keys                  jinn ssh-key init|add|rm …
   jinn functions                 jinn function rm NAME|fnc_…
   jinn publish function.json
   jinn run NAME|fnc_… [--prompt PROMPT] [--in DIR] [--out DIR] [--image IMG] [--env K=V]… [--version N] [--webhook URL] [--ref REF] [--idempotency-key KEY] [--detach]
   jinn exec run_… [--workdir D] [--timeout T] -- COMMAND…
   jinn cp PATH run_…:PATH        jinn cp run_…:PATH PATH
-  jinn shell run_…
+  jinn shell run_…|MACHINE
   jinn finish run_… [--failed REASON]
   jinn runs [--function NAME|fnc_…] [--state active|succeeded|failed]
   jinn show run_…
@@ -135,6 +140,16 @@ func main() {
 	switch cmd {
 	case "login":
 		err = login(ctx)
+	case "machines":
+		err = machines(ctx)
+	case "machine":
+		err = machine(ctx, args)
+	case "ssh":
+		err = sshConnect(ctx, args)
+	case "ssh-keys":
+		err = sshKeys(ctx)
+	case "ssh-key":
+		err = sshKey(ctx, args)
 	case "functions":
 		err = functions(ctx)
 	case "function":
