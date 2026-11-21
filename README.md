@@ -41,12 +41,28 @@ A function without an agent starts a VM and waits for you. `jinn exec` runs a co
 
 <img src="assets/machine.gif" alt="jinn run of a function without an agent, jinn cp and jinn exec into it, jinn finish saving an image, and a run from that image" width="820">
 
+## Machines and SSH
+
+A machine is a persistent Linux VM with a fixed SSH address (`<slug>@ssh.usejinn.com`). It wakes automatically when you connect with SSH and saves its disk and stops after idle:
+
+```sh
+jinn ssh-key init                            # generates ~/.ssh/id_ed25519 if missing, uploads .pub, configures ~/.ssh/config
+jinn machine create dev --size m --idle 10   # creates a stopped machine
+jinn ssh dev                                 # wakes and connects as root (or: ssh <slug>@ssh.usejinn.com)
+jinn ssh dev --user devuser                  # connects as a custom Linux user (devuser+<slug>@ssh.usejinn.com)
+```
+
+Works directly with standard OpenSSH, Antigravity Remote SSH, VS Code Remote-SSH, `sftp`, `scp`, and loopback local port forwarding (`-L`). See [docs.usejinn.com/machines](https://docs.usejinn.com/machines).
+
 ## Commands
 
 | Command | Does |
 |---|---|
+| `jinn machines`, `jinn machine create\|show\|start\|stop\|resize\|snapshot\|rm` | Manage persistent SSH machines |
+| `jinn ssh MACHINE\|RUN [--user USER] [-- SSH_ARGS…]` | Connect via SSH (waking a stopped machine automatically) |
+| `jinn ssh-keys`, `jinn ssh-key init\|add\|rm` | Manage account SSH keys and `~/.ssh/config` |
 | `jinn run FUNCTION [--prompt TEXT] [--in DIR] [--out DIR] [--image IMG]` | Start a run; follow an agent's run and download its output |
-| `jinn exec RUN -- COMMAND`, `jinn cp`, `jinn shell RUN`, `jinn finish RUN [--failed REASON]` | Act on a run: run a command, copy files, open a terminal, end it |
+| `jinn exec RUN -- COMMAND`, `jinn cp`, `jinn shell RUN\|MACHINE`, `jinn finish RUN [--failed REASON]` | Act on a run: run a command, copy files, open a terminal, end it |
 | `jinn runs`, `jinn show RUN`, `jinn logs RUN --follow` | Read runs and their logs |
 | `jinn publish FILE`, `jinn function rm FUNCTION` | Make a function, or publish its next version; delete a function |
 | `jinn images`, `jinn image rm IMG` | List the account's images and Jinn's bases; delete an image |
@@ -71,7 +87,7 @@ The release workflow also signs each release with Jinn's release key (Ed25519), 
 The build is reproducible. Rebuild a tag and compare its SHA-256 with the release's `SHA256SUMS`:
 
 ```sh
-git checkout v0.6.4
+git checkout v0.7.2
 GOTOOLCHAIN=go1.25.12 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w -buildid=" -o jinn-linux-amd64 .
 sha256sum jinn-linux-amd64
 ```
