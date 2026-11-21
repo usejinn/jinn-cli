@@ -78,22 +78,32 @@ func defaultSSHKeyName() string {
 func sshKeyInit(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("ssh-key init", flag.ContinueOnError)
 	name := fs.String("name", defaultSSHKeyName(), "name for this SSH key in Jinn")
+	file := fs.String("file", "", "private key path (default ~/.ssh/id_ed25519)")
+	noConfig := fs.Bool("no-config", false, "do not add Host ssh.usejinn.com to ~/.ssh/config")
 	if err := fs.Parse(args); err != nil {
 		return usageError(err.Error())
+	}
+	if fs.NArg() > 0 {
+		return usageError("usage: jinn ssh-key init [--name NAME] [--file PATH] [--no-config]")
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return err
 	}
 	sshDir := filepath.Join(home, ".ssh")
-	privPath := filepath.Join(sshDir, "id_ed25519")
+	privPath := *file
+	if privPath == "" {
+		privPath = filepath.Join(sshDir, "id_ed25519")
+	} else if strings.HasPrefix(privPath, "~/") {
+		privPath = filepath.Join(home, privPath[2:])
+	}
 	pubPath := privPath + ".pub"
 	created := false
 	if _, err := os.Stat(pubPath); errors.Is(err, os.ErrNotExist) {
 		if _, err := os.Stat(privPath); err == nil {
 			return fmt.Errorf("%s exists without %s; pass a public key file to jinn ssh-key add", privPath, pubPath)
 		}
-		if err := os.MkdirAll(sshDir, 0o700); err != nil {
+		if err := os.MkdirAll(filepath.Dir(privPath), 0o700); err != nil {
 			return err
 		}
 		gen := exec.CommandContext(ctx, "ssh-keygen", "-t", "ed25519", "-f", privPath, "-N", "", "-C", *name)
@@ -104,7 +114,89 @@ func sshKeyInit(ctx context.Context, args []string) error {
 		}
 		created = true
 	}
-	return uploadSSHKey(ctx, pubPath, *name, created)
+	if err := uploadSSHKey(ctx, pubPath, *name, created); err != nil {
+		return err
+	}
+	if !*noConfig {
+		cfgPath := filepath.Join(sshDir, "config")
+		added, err := ensureSSHConfig(cfgPath, home, "ssh.usejinn.com", privPath)
+		if err != nil {
+			return err
+		}
+		if !asJSON {
+			if added {
+				fmt.Printf("%s added Host ssh.usejinn.com to %s\n", paint(green, "✓"), cfgPath)
+			} else {
+				fmt.Printf("%s %s already configures ssh.usejinn.com\n", paint(green, "✓"), cfgPath)
+			}
+		}
+	}
+	return nil
+}
+
+// ensureSSHConfig appends a Host block for host pointing to privPath in
+// cfgPath if no Host entry already names host. It returns true when it wrote
+// a new block.
+func ensureSSHConfig(cfgPath, home, host, privPath string) (bool, error) {
+	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o700); err != nil {
+		return false, err
+	}
+	var existing []byte
+	if b, err := os.ReadFile(cfgPath); err == nil {
+		existing = b
+		if sshConfigHasHost(string(b), host) {
+			return false, nil
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return false, err
+	}
+	idFile := privPath
+	if home != "" {
+		if rel, err := filepath.Rel(home, privPath); err == nil && !strings.HasPrefix(rel, "..") && rel != "." {
+			idFile = "~/" + filepath.ToSlash(rel)
+		}
+	}
+	if strings.ContainsAny(idFile, " \t") {
+		idFile = fmt.Sprintf("%q", idFile)
+	}
+	block := fmt.Sprintf("# Added by jinn ssh-key init\nHost %s\n    IdentityFile %s\n    IdentitiesOnly yes\n    ServerAliveInterval 30\n", host, idFile)
+	var out strings.Builder
+	if len(existing) > 0 {
+		out.Write(existing)
+		if !strings.HasSuffix(string(existing), "\n") {
+			out.WriteByte('\n')
+		}
+		out.WriteByte('\n')
+	}
+	out.WriteString(block)
+	perm := os.FileMode(0o600)
+	if info, err := os.Stat(cfgPath); err == nil {
+		perm = info.Mode().Perm()
+	}
+	if err := os.WriteFile(cfgPath, []byte(out.String()), perm); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func sshConfigHasHost(content, target string) bool {
+	target = strings.ToLower(target)
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 2 || strings.ToLower(fields[0]) != "host" {
+			continue
+		}
+		for _, h := range fields[1:] {
+			if strings.ToLower(h) == target {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func sshKeyAdd(ctx context.Context, args []string) error {
