@@ -58,7 +58,7 @@ Works directly with standard OpenSSH, Antigravity Remote SSH, VS Code Remote-SSH
 
 | Command | Does |
 |---|---|
-| `jinn machines`, `jinn machine create\|show\|start\|stop\|resize\|snapshot\|rm` | Manage persistent SSH machines |
+| `jinn machines`, `jinn machine create\|show\|start\|stop\|heartbeat\|resize\|snapshot\|rm` | Manage persistent SSH machines, activity leases, env and setup |
 | `jinn ssh MACHINE\|RUN [--user USER] [-- SSH_ARGS…]` | Connect via SSH (waking a stopped machine automatically) |
 | `jinn ssh-keys`, `jinn ssh-key init\|add\|rm` | Manage account SSH keys and `~/.ssh/config` |
 | `jinn run FUNCTION [--prompt TEXT] [--in DIR] [--out DIR] [--image IMG]` | Start a run; follow an agent's run and download its output |

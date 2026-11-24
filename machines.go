@@ -292,9 +292,17 @@ func machines(ctx context.Context) error {
 	return nil
 }
 
+type stringFlags []string
+
+func (s *stringFlags) String() string { return "" }
+func (s *stringFlags) Set(v string) error {
+	*s = append(*s, v)
+	return nil
+}
+
 func machine(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return usageError("usage: jinn machine create|show|start|stop|resize|snapshot|rm …")
+		return usageError("usage: jinn machine create|show|start|stop|heartbeat|resize|snapshot|rm …")
 	}
 	switch args[0] {
 	case "create":
@@ -305,6 +313,8 @@ func machine(ctx context.Context, args []string) error {
 		return machineStart(ctx, args[1:])
 	case "stop":
 		return machineStop(ctx, args[1:])
+	case "heartbeat":
+		return machineHeartbeat(ctx, args[1:])
 	case "resize":
 		return machineResize(ctx, args[1:])
 	case "snapshot":
@@ -312,7 +322,7 @@ func machine(ctx context.Context, args []string) error {
 	case "rm":
 		return machineRm(ctx, args[1:])
 	default:
-		return usageError("usage: jinn machine create|show|start|stop|resize|snapshot|rm …")
+		return usageError("usage: jinn machine create|show|start|stop|heartbeat|resize|snapshot|rm …")
 	}
 }
 
@@ -326,19 +336,36 @@ func machineCreate(ctx context.Context, args []string) error {
 	size := fs.String("size", "", "machine size: s, m, l or xl (default m)")
 	img := fs.String("image", "", "starting image: img_… or base name")
 	idle := fs.Int("idle", 0, "idle stop timeout in minutes (default 10)")
+	timeout := fs.Int("timeout", 0, "hard timeout per wake in minutes (1 to 1440)")
+	webhook := fs.String("webhook", "", "https URL for run lifecycle events")
+	ref := fs.String("ref", "", "external reference")
+	var env envFlags
+	var setup stringFlags
+	fs.Var(&env, "env", "environment variable NAME=value (repeatable)")
+	fs.Var(&setup, "setup", "setup command run as root on every wake (repeatable)")
 	if err := fs.Parse(args); err != nil {
 		return usageError(err.Error())
 	}
 	if fs.NArg() > 0 && name == "" {
 		name = fs.Arg(0)
 	} else if fs.NArg() > 0 {
-		return usageError("usage: jinn machine create [NAME] [--size s|m|l|xl] [--image IMG] [--idle 10]")
+		return usageError("usage: jinn machine create [NAME] [--size s|m|l|xl] [--image IMG] [--idle 10] [--timeout M] [--env K=V]… [--setup CMD]… [--webhook URL] [--ref REF]")
 	}
 	c, err := client()
 	if err != nil {
 		return err
 	}
-	m, err := c.CreateMachine(ctx, jinn.MachineRequest{Name: name, Size: *size, Image: *img, IdleMinutes: *idle})
+	m, err := c.CreateMachine(ctx, jinn.MachineRequest{
+		Name:              name,
+		Size:              *size,
+		Image:             *img,
+		IdleMinutes:       *idle,
+		TimeoutMinutes:    *timeout,
+		Setup:             setup,
+		Environment:       env,
+		Webhook:           *webhook,
+		ExternalReference: *ref,
+	})
 	if err != nil {
 		return err
 	}
@@ -376,22 +403,52 @@ func machineShow(ctx context.Context, args []string) error {
 	fmt.Printf("size:    %s\n", m.Size)
 	fmt.Printf("image:   %s\n", m.Image)
 	fmt.Printf("idle:    %dm\n", m.IdleMinutes)
+	if m.TimeoutMinutes > 0 {
+		fmt.Printf("timeout: %dm\n", m.TimeoutMinutes)
+	}
+	if m.Webhook != "" {
+		fmt.Printf("webhook: %s\n", m.Webhook)
+	}
+	if m.ExternalReference != "" {
+		fmt.Printf("ref:     %s\n", m.ExternalReference)
+	}
+	if len(m.Environment) > 0 {
+		fmt.Printf("env:     %d variables\n", len(m.Environment))
+	}
+	if len(m.Setup) > 0 {
+		fmt.Printf("setup:   %d commands\n", len(m.Setup))
+	}
 	fmt.Printf("ssh:     ssh %s\n", m.SSH)
 	if m.ActiveRun != "" {
-		fmt.Printf("run:     %s\n", m.ActiveRun)
+		fmt.Printf("run:     %s (leases=%d)\n", m.ActiveRun, m.ActiveConnections)
 	}
 	return nil
 }
 
 func machineStart(ctx context.Context, args []string) error {
-	if len(args) != 1 {
-		return usageError("usage: jinn machine start NAME|SLUG|mch_…")
+	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
+		return usageError("usage: jinn machine start NAME|SLUG|mch_… [--env K=V]… [--webhook URL] [--ref REF]")
+	}
+	fs := flag.NewFlagSet("machine start", flag.ContinueOnError)
+	webhook := fs.String("webhook", "", "https URL for this wake's run events")
+	ref := fs.String("ref", "", "external reference for this wake")
+	var env envFlags
+	fs.Var(&env, "env", "ephemeral environment variable NAME=value for this wake (repeatable)")
+	if err := fs.Parse(args[1:]); err != nil {
+		return usageError(err.Error())
+	}
+	if fs.NArg() > 0 {
+		return usageError("usage: jinn machine start NAME|SLUG|mch_… [--env K=V]… [--webhook URL] [--ref REF]")
 	}
 	c, err := client()
 	if err != nil {
 		return err
 	}
-	m, err := c.StartMachine(ctx, args[0])
+	m, err := c.StartMachineWith(ctx, args[0], jinn.MachineStartRequest{
+		Environment:       env,
+		Webhook:           *webhook,
+		ExternalReference: *ref,
+	})
 	if err != nil {
 		return err
 	}
@@ -400,6 +457,40 @@ func machineStart(ctx context.Context, args []string) error {
 		return nil
 	}
 	fmt.Printf("%s %s %s\n", paint(cyan, m.Slug), m.State, paint(dim, m.ActiveRun))
+	return nil
+}
+
+func machineHeartbeat(ctx context.Context, args []string) error {
+	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
+		return usageError("usage: jinn machine heartbeat NAME|SLUG|mch_… [--lease ID] [--ttl SECONDS] [--release]")
+	}
+	fs := flag.NewFlagSet("machine heartbeat", flag.ContinueOnError)
+	lease := fs.String("lease", "", "activity lease id (default \"default\")")
+	ttl := fs.Int("ttl", 0, "lease TTL in seconds (30 to 900, default 300)")
+	release := fs.Bool("release", false, "release the lease instead of extending it")
+	if err := fs.Parse(args[1:]); err != nil {
+		return usageError(err.Error())
+	}
+	if fs.NArg() > 0 {
+		return usageError("usage: jinn machine heartbeat NAME|SLUG|mch_… [--lease ID] [--ttl SECONDS] [--release]")
+	}
+	c, err := client()
+	if err != nil {
+		return err
+	}
+	m, err := c.HeartbeatMachine(ctx, args[0], jinn.MachineHeartbeatRequest{
+		LeaseID:    *lease,
+		TTLSeconds: *ttl,
+		Release:    *release,
+	})
+	if err != nil {
+		return err
+	}
+	if asJSON {
+		emit(m)
+		return nil
+	}
+	fmt.Printf("%s %s leases=%d\n", paint(cyan, m.Slug), m.State, m.ActiveConnections)
 	return nil
 }
 
@@ -425,12 +516,15 @@ func machineStop(ctx context.Context, args []string) error {
 
 func machineResize(ctx context.Context, args []string) error {
 	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
-		return usageError("usage: jinn machine resize NAME|SLUG|mch_… --size s|m|l|xl [--idle N]")
+		return usageError("usage: jinn machine resize NAME|SLUG|mch_… [--size s|m|l|xl] [--idle N] [--name NAME] [--timeout M] [--webhook URL] [--ref REF]")
 	}
 	fs := flag.NewFlagSet("machine resize", flag.ContinueOnError)
 	size := fs.String("size", "", "new size: s, m, l or xl")
 	idle := fs.Int("idle", 0, "new idle stop timeout in minutes")
 	rename := fs.String("name", "", "new name")
+	timeout := fs.Int("timeout", -1, "new wake timeout in minutes (0 clears)")
+	webhook := fs.String("webhook", "", "new webhook https URL")
+	ref := fs.String("ref", "", "new external reference")
 	if err := fs.Parse(args[1:]); err != nil {
 		return usageError(err.Error())
 	}
@@ -444,8 +538,17 @@ func machineResize(ctx context.Context, args []string) error {
 	if *rename != "" {
 		req.Name = rename
 	}
-	if req.Size == nil && req.IdleMinutes == nil && req.Name == nil {
-		return usageError("pass --size, --idle or --name")
+	if *timeout >= 0 {
+		req.TimeoutMinutes = timeout
+	}
+	if *webhook != "" {
+		req.Webhook = webhook
+	}
+	if *ref != "" {
+		req.ExternalReference = ref
+	}
+	if req.Size == nil && req.IdleMinutes == nil && req.Name == nil && req.TimeoutMinutes == nil && req.Webhook == nil && req.ExternalReference == nil {
+		return usageError("pass --size, --idle, --name, --timeout, --webhook or --ref")
 	}
 	c, err := client()
 	if err != nil {

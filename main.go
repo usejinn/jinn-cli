@@ -46,9 +46,11 @@ import (
 const usage = `jinn: run functions, manage machines, and act on runs.
 
   jinn login
-  jinn machines                  jinn machine create [NAME] [--size s|m|l|xl] [--image IMG] [--idle 10]
-  jinn machine show|start|stop|snapshot|rm NAME|SLUG|mch_…
-  jinn machine resize NAME|SLUG|mch_… --size s|m|l|xl [--idle N]
+  jinn machines                  jinn machine create [NAME] [--size s|m|l|xl] [--image IMG] [--idle 10] [--env K=V]… [--setup CMD]… [--webhook URL] [--ref REF]
+  jinn machine show|stop|snapshot|rm NAME|SLUG|mch_…
+  jinn machine start NAME|SLUG|mch_… [--env K=V]… [--webhook URL] [--ref REF]
+  jinn machine heartbeat NAME|SLUG|mch_… [--lease ID] [--ttl SECONDS] [--release]
+  jinn machine resize NAME|SLUG|mch_… [--size s|m|l|xl] [--idle N] [--timeout M] [--webhook URL] [--ref REF]
   jinn ssh NAME|SLUG|mch_…|run_… [--user USER] [-- SSH_ARGS…]
   jinn ssh-keys                  jinn ssh-key init|add|rm …
   jinn functions                 jinn function rm NAME|fnc_…
